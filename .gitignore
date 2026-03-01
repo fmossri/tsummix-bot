@@ -2,4 +2,5 @@ node_modules
 .env
 .cursorrules
 .cursor/
+docs/
 eslint.config.mjs

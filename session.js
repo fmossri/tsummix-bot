@@ -34,6 +34,10 @@ const sessionStore = {
 	channelHasSession(channelId) {
 		return this.findSessionByChannelId(channelId) !== null;
 	},
+
+	clearSessions() {
+		sessions.clear();
+	},
 };
 
 module.exports = {
