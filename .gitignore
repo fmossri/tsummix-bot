@@ -1,6 +1,30 @@
-node_modules
+# Dependencies
+node_modules/
+.venv/
+
+# Secrets and local config
 .env
-.cursorrules
+.env.local
+
+# Editor / IDE / OS
 .cursor/
+.cursorrules
+.DS_Store
+Thumbs.db
+
+# STT: downloaded model cache (default: .models/)
+.models/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+
+# Test / generated assets (large or machine-specific)
+tests/audio-samples/
+
+# Optional: comment out if you want to track docs and eslint config in git
 docs/
 eslint.config.mjs
