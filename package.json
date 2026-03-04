@@ -5,10 +5,11 @@
   "main": "index.js",
   "scripts": {
     "test": "jest"
- },
+  },
   "dependencies": {
     "discord.js": "^14.25.1",
-    "dotenv": "^17.3.1"
+    "dotenv": "^17.3.1",
+    "node-wav": "^0.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

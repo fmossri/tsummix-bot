@@ -8,24 +8,28 @@ A Discord bot that implements STT and summarization capabilities.
 
 ## Current Features
 
-### STT wrapper (Python) — **in progress**
+### STT wrapper (Python)
 
-- FastAPI service that loads a faster-whisper model at startup and exposes **`GET /health`** (model id, device, ready).
+- FastAPI service that loads a faster-whisper model at startup and exposes **`GET /health`** (model id, device, ready) and **`POST /transcribe`** (JSON + base64 audio; returns segments and metrics).
 - Model config via env: built-in size, Hugging Face repo id, or local path; cache directory (default `.models/`).
-- Benchmark script `stt-wrapper/repl.py` for testing transcription on WAV files (see `docs/STT-BENCHMARKS.md` if present).
+
+### Transcript worker (Node.js)
+
+- Per-meeting queue and HTTP client to the STT wrapper; appends transcription results to a JSONL file per meeting.
+- Standalone HTTP server (`services/worker/index.js`) with **`/start-meeting`**, **`/enqueue-chunk`**, **`/close-meeting`**. Smoke test: `scripts/transcript-worker/test-from-disk.js` (feeds WAV files from disk).
+- Documented in `docs/TRANSCRIPT-WORKER.md`.
 
 ### Discord bot (Node.js) — session and interface
 
-- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel.
+- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel. **in progress**
 - **`/close`** — End the session and delete session data. Only participants can close.
-- Disclaimer flow with a one-minute timeout; if not everyone accepts in time, the session is aborted.
-- Session state stored in memory (no database).
+- Session state stored in memory (no database). Voice capture and sending chunks to the Worker are not yet wired.
 
 ---
 
 ## Intended flow
 
-After participants accept the disclaimer, the bot captures audio from the voice channel, sends it (via a Worker) to the STT service for transcription, receives the full transcript, then sends it to an LLM for summarization. Session handling and disclaimer are in place; voice capture, Worker, and LLM summarization are in progress (see docs).
+After participants accept the disclaimer, the bot captures audio from the voice channel, sends it (via the Worker) to the STT service for transcription, receives the full transcript, then sends it to an LLM for summarization. **Done:** Session and disclaimer; STT wrapper `/transcribe` API; transcript Worker (queue, STT client, JSONL file, standalone server). **Next:** Bot voice capture, decode & chunk and send to Worker, then session end and LLM summarization.
 
 ---
 
@@ -86,6 +90,8 @@ Copy `.env-example` to `.env` and set:
 | `STT_USE_LOCAL`    | Use only cached models, no network. Set to `true` after first download or for offline. |
 | `STT_DEVICE`       | Device for inference: `cpu`, `cuda`, or `auto`. |
 | `STT_LANGUAGE`     | Optional. Language hint for transcription (e.g. `pt`, `en`). See [Whisper language codes](https://github.com/openai/whisper#available-models-and-languages). |
+| `STT_BASE_URL`     | Base URL of the STT wrapper (e.g. `http://localhost:8000`). Used by the transcript Worker. |
+| `WORKER_PORT`      | Port for the transcript Worker HTTP server (e.g. `3000`). Used when running `node services/worker/index.js`. |
 
 ---
 
@@ -110,9 +116,28 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
   ```bash
   uvicorn stt-wrapper.app:app --reload
   ```
-- Run the benchmark script (WAVs under `tests/audio-samples/` or path in script):
+- Run the simple REPL benchmark against WAV files (WAVs under `tests/audio-samples/` or path in script):
   ```bash
   python3 stt-wrapper/repl.py
+  ```
+- Run the standalone model benchmark script (measures model/options latency only, no HTTP):
+  ```bash
+  python3 scripts/stt-wrapper/model_benchmark.py
+  ```
+- Run a manual smoke test against the wrapper HTTP API (`/health` and `/transcribe`):
+  ```bash
+  python3 scripts/stt-wrapper/smoke_stt_wrapper.py
+  ```
+
+**Transcript worker**
+
+- Run the worker HTTP server (from repo root, with STT wrapper running):
+  ```bash
+  node services/worker/index.js
+  ```
+- Run a smoke test that feeds WAV files from disk into the worker (in-process): start meeting, enqueue each file as a chunk, close meeting, then print transcript path and a short preview. Default directory: `tests/audio-samples`. Optional argument: path to a folder of `.wav` files (e.g. `tests/audio-files`).
+  ```bash
+  node scripts/transcript-worker/test-from-disk.js [audio-dir]
   ```
 
 ---
@@ -121,8 +146,8 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 
 | Command   | Description |
 |-----------|-------------|
-| `/start` | Start a meeting. You must be in a voice channel. Bot posts a disclaimer; each participant must Accept or Reject. Session times out after 1 minute if not everyone accepts. **in progress** | 
-| `/close` | Close the session and delete session data. You must be in the same voice channel, be a participant, and the disclaimer must have been accepted by all. **in progress** |
+| `/start` | Start a meeting. Must be in a voice channel. | 
+| `/close` | Close the session and delete session data. Must be in the same voice channel. |
 
 ---
 
@@ -136,8 +161,13 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 | `events/` | `ready.js`, `interactionCreate.js` |
 | `session.js` | In-memory session store (`sessionStore`) |
 | `handleDisclaimerButtons.js` | Handles disclaimer Accept/Reject buttons |
-| `stt-wrapper/app.py` | FastAPI app: `/health`, model load at startup |
-| `stt-wrapper/repl.py` | Benchmark script: run transcription on WAV files |
+| `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
+| `stt-wrapper/repl.py` | Simple REPL-style script: run transcription on WAV files |
+| `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
+| `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
+| `services/worker/transcript-worker.js` | Transcript Worker: per-meeting queue, STT client, JSONL transcript |
+| `services/worker/index.js` | Transcript Worker HTTP server: `/start-meeting`, `/enqueue-chunk`, `/close-meeting` |
+| `scripts/transcript-worker/test-from-disk.js` | Smoke test: feed WAV files from disk through the Worker (start → enqueue → close → preview transcript) |
 | `scripts/env.sh` | Unix: activate venv + set `LD_LIBRARY_PATH` for CUDA libs |
 | `scripts/env.bat` | Windows: activate venv + set `PATH` for CUDA libs |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |

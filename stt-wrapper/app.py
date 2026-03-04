@@ -22,7 +22,6 @@ class Metrics(BaseModel):
 class TranscribeRequest(BaseModel):
     meetingId: str
     chunkId: int
-    participantId: str
     chunkStartTimeMs: int
     chunkEndTimeMs: int
     audio: str
@@ -30,7 +29,6 @@ class TranscribeRequest(BaseModel):
 class TranscribeResponse(BaseModel):
     meetingId: str
     chunkId: int
-    participantId: str
     segments: list[Segment]
     metrics: Metrics
 
@@ -100,7 +98,6 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
         response = TranscribeResponse(
             meetingId=request.meetingId,
             chunkId=request.chunkId,
-            participantId=request.participantId,
             segments=segments,
             metrics=metrics)
         return response
