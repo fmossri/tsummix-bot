@@ -37,11 +37,18 @@ module.exports = {
 			});
 			return;
 		}
-
-		await interaction.client.sessionManager.finishMeeting(session.sessionId);
-		await interaction.reply({
-			content: 'The meeting is over. Thank you for participating.',
-		});
-		console.log('meeting finished.');
-	},
+        try {
+            const { summary } = await interaction.client.sessionManager.finishMeeting(session.sessionId);
+            await interaction.reply({
+                content: `The meeting is over. Thank you for participating.\n\n**Summary:**\n${summary}`,
+            });
+            console.log('meeting finished.');
+        } catch (error) {
+            console.error('error finishing meeting.', error);
+            await interaction.reply({
+                content: 'An error occurred while finishing the meeting.',
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+    },
 };

@@ -322,8 +322,7 @@ function createSessionManager() {
         async function stopVoiceCapture(sessionId, finished) {
             const sessionState = sessionStates.get(sessionId);
             if (!sessionState) {
-                console.error('session not found.', sessionId);
-                return false;
+                throw new Error('session not found.');
             }
             try {
                 for (const participantId of sessionState.participantIds) {
@@ -337,8 +336,7 @@ function createSessionManager() {
                 if (finished) {
                     const transcriptPath = await transcriptWorker.closeMeeting(sessionId);
                     if (!transcriptPath) {
-                        console.error('error closing meeting.', sessionId);
-                        return false;
+                        throw new Error('invalid transcript path.');
                     }
                     console.log('transcript path:', transcriptPath);
                     sessionStates.delete(sessionId);
@@ -346,8 +344,7 @@ function createSessionManager() {
                 }
             }
             catch (error) {
-                console.error('error stopping voice capture.', error);
-                return false;
+                throw new Error(error.message);
             }
         }
 
@@ -393,14 +390,12 @@ function createSessionManager() {
         async function finishMeeting(sessionId) {
             const sessionState = sessionStates.get(sessionId);
             if (!sessionState) {
-                console.error('session not found.', sessionId);
-                return false;
+                throw new Error('session not found.');
             }
             try {
                 const transcriptPath = await stopVoiceCapture(sessionId, true);
                 if (!transcriptPath?.endsWith('.jsonl')) {
-                    console.error('invalid transcript path.', transcriptPath);
-                    return false;
+                    throw new Error('invalid transcript path.');
                 }
                 const reportPath = await generateReport(transcriptPath);
                 const summary = await generateSummary(reportPath);
@@ -411,8 +406,7 @@ function createSessionManager() {
                 return { reportPath, summary };
             }
             catch (error) {
-                console.error('error finishing meeting.', error);
-                return false;
+                throw new Error(error.message);
             }
         }
 

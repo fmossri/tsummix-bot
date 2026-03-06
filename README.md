@@ -8,6 +8,12 @@ A Discord bot that implements STT and summarization capabilities.
 
 ## Current Features
 
+### Discord bot (Node.js) — session and interface
+
+- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel.
+- **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
+- Session state stored in memory (no database). Voice capture, per‑participant chunking, and sending chunks to the Worker are coordinated by the session manager (`services/session-manager/session-manager.js`).
+
 ### STT wrapper (Python)
 
 - FastAPI service that loads a faster-whisper model at startup and exposes **`GET /health`** (model id, device, ready) and **`POST /transcribe`** (JSON + base64 audio; returns segments and metrics).
@@ -16,19 +22,26 @@ A Discord bot that implements STT and summarization capabilities.
 ### Transcript worker (Node.js)
 
 - Per-meeting queue and HTTP client to the STT wrapper; appends transcription results to a JSONL file per meeting.
-- Standalone HTTP server (`services/worker/index.js`) with **`/start-meeting`**, **`/enqueue-chunk`**, **`/close-meeting`**. Smoke test: `scripts/transcript-worker/test-from-disk.js` (feeds WAV files from disk).
+- Standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-meeting`**, **`/enqueue-chunk`**, **`/close-meeting`**. Smoke test: `scripts/transcript-worker/test-from-disk.js` (feeds WAV files from disk).
 
-### Discord bot (Node.js) — session and interface
+### Transcript pretty-print & summarization
 
-- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel.
-- **`/close`** — End the session and delete session data. Only participants can close.
-- Session state stored in memory (no database). Voice capture, per‑participant chunking, and sending chunks to the Worker are wired via `services/voice-manager/session-voice-manager.js`.
+- After `/close`, the session manager:
+  - Asks the transcript Worker to close the meeting and return the path to the JSONL transcript.
+  - Generates a human-readable Markdown report (`reports/meeting-report_*.md`) with a fixed-width table: **time | display name | text**, wrapping only the text column.
+  - Calls a summarization helper that reads the report and calls a local LLM.
+- The first LLM provider is **Ollama** running **`phi3:mini`** locally:
+  - Controlled by env vars like `LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `LLM_TEMPERATURE`.
+  - Supports optional truncation for long meetings with `LLM_TRUNCATION_ENABLED`, `LLM_TRUNCATION_MAX_CHARS`, and a simple chunk‑and‑combine strategy.
+- The `/close` command posts a short Markdown summary back to Discord; the full Markdown report stays on disk for inspection.
 
 ---
 
 ## Intended flow
 
-After participants accept the disclaimer, the bot captures audio from the voice channel, sends it (via the Worker) to the STT service for transcription, receives the full transcript, then sends it to an LLM for summarization. **Done:** Session and disclaimer; STT wrapper `/transcribe` API; transcript Worker (queue, STT client, JSONL file, standalone server); bot voice capture, per‑participant decode & chunk, and sending chunks to the Worker. **Next:** Session end flow on `/close` (use transcript path, pretty‑print transcript, call LLM) and stronger integration/testing.
+After participants accept the disclaimer, the bot captures audio from the voice channel and hands it to the session manager, which chunks per participant and enqueues chunks to the Worker. The Worker calls the STT service for transcription and writes a JSONL transcript per meeting. On `/close`, the session manager stops capture, closes the Worker meeting to get the transcript path, pretty‑prints the transcript into a Markdown report, and calls an LLM to summarize it; the bot then posts the summary in Discord.  
+**Done:** Session and disclaimer; STT wrapper `/transcribe` API; transcript Worker (queue, STT client, JSONL file, standalone server); bot voice capture, per‑participant decode & chunk, and sending chunks to the Worker; end‑of‑meeting pretty‑print and summarization on `/close`.  
+**Next:** Integration tests and stronger error-handling around Worker/STT/LLM failures.
 
 ---
 
@@ -78,19 +91,28 @@ After participants accept the disclaimer, the bot captures audio from the voice 
 
 Copy `.env-example` to `.env` and set:
 
-| Variable           | Description |
-|--------------------|-------------|
-| `DISCORD_TOKEN`    | Bot token (Developer Portal → Bot → Reset Token) |
-| `APP_ID`           | Application ID (Developer Portal → General Information) |
-| `SERVER_ID`        | Guild ID where slash commands are registered |
-| `PUBLIC_KEY`       | Application public key (Developer Portal → General Information) |
-| `STT_MODEL_ID`     | Model to load: built-in size (e.g. `medium`), HF repo id (e.g. `dwhoelz/whisper-medium-pt-ct2`), or local path to a CTranslate2 model dir |
-| `STT_DOWNLOAD_PATH` | Where to download/cache models when using a size or HF repo (default `.models/`). Ignored when `STT_MODEL_ID` is a local path. First run may download. |
-| `STT_USE_LOCAL`    | Use only cached models, no network. Set to `true` after first download or for offline. |
-| `STT_DEVICE`       | Device for inference: `cpu`, `cuda`, or `auto`. |
-| `STT_LANGUAGE`     | Optional. Language hint for transcription (e.g. `pt`, `en`). See [Whisper language codes](https://github.com/openai/whisper#available-models-and-languages). |
-| `STT_BASE_URL`     | Base URL of the STT wrapper (e.g. `http://localhost:8000`). Used by the transcript Worker. |
-| `WORKER_PORT`      | Port for the transcript Worker HTTP server (e.g. `3000`). Used when running `node services/worker/index.js`. |
+| Variable                 | Description |
+|--------------------------|-------------|
+| `DISCORD_TOKEN`          | Bot token (Developer Portal → Bot → Reset Token) |
+| `APP_ID`                 | Application ID (Developer Portal → General Information) |
+| `SERVER_ID`              | Guild ID where slash commands are registered |
+| `PUBLIC_KEY`             | Application public key (Developer Portal → General Information) |
+| `STT_MODEL_ID`           | Model to load: built-in size (e.g. `medium`), HF repo id (e.g. `dwhoelz/whisper-medium-pt-ct2`), or local path to a CTranslate2 model dir |
+| `STT_DOWNLOAD_PATH`      | Where to download/cache models when using a size or HF repo (default `.models/`). Ignored when `STT_MODEL_ID` is a local path. First run may download. |
+| `STT_USE_LOCAL`          | Use only cached models, no network. Set to `true` after first download or for offline. |
+| `STT_DEVICE`             | Device for inference: `cpu`, `cuda`, or `auto`. |
+| `STT_LANGUAGE`           | Optional. Language hint for transcription (e.g. `pt`, `en`). See Whisper language codes. |
+| `STT_BASE_URL`           | Base URL of the STT wrapper (e.g. `http://localhost:8000`). Used by the transcript Worker. |
+| `WORKER_PORT`            | Port for the transcript Worker HTTP server (e.g. `3000`). Used when running `node services/transcript-worker/index.js`. |
+| `LLM_PROVIDER`           | LLM provider to use for summaries (currently `ollama`). |
+| `LLM_USE_LOCAL`          | Whether to use a local LLM instead of a remote API. |
+| `OLLAMA_BASE_URL`        | Base URL of the Ollama server (e.g. `http://localhost:11434`). |
+| `OLLAMA_MODEL`           | Ollama model name to use (e.g. `phi3:mini`). |
+| `LLM_TRUNCATION_ENABLED` | Enable truncation for long reports before calling the LLM (`true`/`false`). |
+| `LLM_TRUNCATION_MAX_CHARS` | Maximum number of report characters to send per LLM call (e.g. `12000`). |
+| `LLM_TRUNCATION_STRATEGY` | Truncation strategy: `tail` (most recent part) or `head` (start of meeting). |
+| `LLM_SYSTEM_PROMPT`      | Optional custom system prompt for summarization; if empty, a default PT-BR prompt is used. |
+| `LLM_TEMPERATURE`        | Sampling temperature for the LLM (e.g. `0.7`). |
 
 ---
 
@@ -164,9 +186,12 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 | `stt-wrapper/repl.py` | Simple REPL-style script: run transcription on WAV files |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
-| `services/worker/transcript-worker.js` | Transcript Worker: per-meeting queue, STT client, JSONL transcript |
-| `services/worker/index.js` | Transcript Worker HTTP server: `/start-meeting`, `/enqueue-chunk`, `/close-meeting` |
-| `services/voice-manager/session-voice-manager.js` | Discord voice session manager: join voice channel, capture participant audio, chunk, and send chunks to Worker |
+| `services/transcript-worker/transcript-worker.js` | Transcript Worker: per-meeting queue, STT client, JSONL transcript |
+| `services/transcript-worker/index.js` | Transcript Worker HTTP server: `/start-meeting`, `/enqueue-chunk`, `/close-meeting` |
+| `services/report-generator/report-generator.js` | Generates pretty-printed Markdown reports (`reports/meeting-report_*.md`) from JSONL transcripts |
+| `services/report-generator/summary-generator.js` | Calls an LLM to summarize a report into a short Markdown summary |
+| `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |
+| `services/session-manager/session-manager.js` | Manages Discord voice connections and per-meeting state: captures participant audio, enqueues chunks to the Worker, closes meetings, generates reports, and runs LLM summarization |
 | `scripts/transcript-worker/test-from-disk.js` | Smoke test: feed WAV files from disk through the Worker (start → enqueue → close → preview transcript) |
 | `scripts/env.sh` | Unix: activate venv + set `LD_LIBRARY_PATH` for CUDA libs |
 | `scripts/env.bat` | Windows: activate venv + set `PATH` for CUDA libs |
