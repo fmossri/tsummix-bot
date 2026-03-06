@@ -25,9 +25,12 @@ const transcriptWorker = createTranscriptWorker({
 
 app.post('/start-meeting', async (req, res) => {
     try {
-        const { meetingId } = req.body;
+        const { meetingId, channelId, participantDisplayNames } = req.body;
         if (!meetingId) return res.status(400).json({ error: 'Meeting ID is required' });
-        const result = await transcriptWorker.startMeeting(meetingId);
+        const metadata = {};
+        if (channelId != null) metadata.channelId = channelId;
+        if (participantDisplayNames != null) metadata.participantDisplayNames = participantDisplayNames;
+        const result = await transcriptWorker.startMeeting(meetingId, metadata);
         res.json(result);
     } catch (error) {
         console.error('Error starting meeting:', error);

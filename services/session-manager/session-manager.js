@@ -1,11 +1,14 @@
-const { sessionStore } = require('../../session.js');
 const prism = require('prism-media');
-const { createTranscriptWorker } = require('../worker/transcript-worker.js');
-const { joinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
 const fetch = require('node-fetch');
 const fs = require('node:fs');
 const path = require('node:path');
 const wav = require('node-wav');
+
+const { sessionStore } = require('../../session.js');
+const { createTranscriptWorker } = require('../transcript-worker/transcript-worker.js');
+const { joinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
+const { generateReport } = require('../report-generator/report-generator.js');
+const { generateSummary } = require('../summary-generator/summary-generator.js');
 
 if (!process.env.STT_BASE_URL) {
     console.error('STT_BASE_URL must be set in .env (e.g. http://localhost:8000)');
@@ -19,7 +22,7 @@ const transcriptWorker = createTranscriptWorker({
     pathImpl: path,
 });
 
-function createSessionVoiceManager() {
+function createSessionManager() {
     const sessionStates = new Map();
 
         async function connectToChannel(sessionId) {
@@ -286,16 +289,6 @@ function createSessionVoiceManager() {
         }
 
         async function startVoiceCapture(sessionId) {
-            if (!sessionStates.has(sessionId)) {
-                const sessionState = sessionStore.getSessionById(sessionId);
-                sessionState.voiceConnection = null;
-                sessionState.nextChunkId = 0;
-                sessionState.chunksQueue = [];
-                sessionState.processingPromise = null;
-                sessionState.participantStates = new Map();
-                sessionStates.set(sessionId, sessionState);
-                await transcriptWorker.startMeeting(sessionId);
-            }
             const sessionState = sessionStates.get(sessionId);
             if (!sessionState) {
                 console.error('session not found.', sessionId);
@@ -342,10 +335,15 @@ function createSessionVoiceManager() {
                     sessionState.voiceConnection = null;
                 }
                 if (finished) {
-                    await transcriptWorker.closeMeeting(sessionId);
+                    const transcriptPath = await transcriptWorker.closeMeeting(sessionId);
+                    if (!transcriptPath) {
+                        console.error('error closing meeting.', sessionId);
+                        return false;
+                    }
+                    console.log('transcript path:', transcriptPath);
                     sessionStates.delete(sessionId);
+                    return transcriptPath;
                 }
-                return true;
             }
             catch (error) {
                 console.error('error stopping voice capture.', error);
@@ -353,12 +351,78 @@ function createSessionVoiceManager() {
             }
         }
 
+        async function startMeeting(sessionId) {
+            const sessionState = sessionStore.getSessionById(sessionId);
+            if (!sessionState) {
+                console.error('session not found.', sessionId);
+                return false;
+            }
+            try {
+                sessionState.voiceConnection = null;
+                sessionState.nextChunkId = 0;
+                sessionState.chunksQueue = [];
+                sessionState.processingPromise = null;
+                sessionState.participantStates = new Map();
+                sessionStates.set(sessionId, sessionState);
+
+                const guild = sessionState.originalInteraction.guild;
+                const participantDisplayNames = [];
+                for (const participantId of sessionState.participantIds) {
+                    const participantDisplayName = guild.members.cache.get(participantId)?.displayName ?? null;
+                    if (!participantDisplayName) {
+                        console.error('participant not found.', participantId);
+                        throw new Error(`participant not found: ${participantId}`);
+                    }
+                    participantDisplayNames.push(participantDisplayName);
+                }
+                await transcriptWorker.startMeeting(sessionId, {
+                    channelId: sessionState.voiceChannelId,
+                    participantDisplayNames,
+                });
+
+                await startVoiceCapture(sessionId);
+                return true;
+            }
+            catch (error) {
+                console.error('error starting meeting.', error);
+                return false;
+            }
+        }
+        function pauseMeeting(sessionId) {}
+        function resumeMeeting(sessionId) {}
+        async function finishMeeting(sessionId) {
+            const sessionState = sessionStates.get(sessionId);
+            if (!sessionState) {
+                console.error('session not found.', sessionId);
+                return false;
+            }
+            try {
+                const transcriptPath = await stopVoiceCapture(sessionId, true);
+                if (!transcriptPath?.endsWith('.jsonl')) {
+                    console.error('invalid transcript path.', transcriptPath);
+                    return false;
+                }
+                const reportPath = await generateReport(transcriptPath);
+                const summary = await generateSummary(reportPath);
+                if (sessionStore.getSessionById(sessionId)) {
+                    sessionStore.deleteSession(sessionId);
+                }
+                console.log('session closed and deleted.');
+                return { reportPath, summary };
+            }
+            catch (error) {
+                console.error('error finishing meeting.', error);
+                return false;
+            }
+        }
 
     return {
-        startVoiceCapture,
-        stopVoiceCapture,
+        startMeeting,
+        pauseMeeting,
+        resumeMeeting,
+        finishMeeting,
         resubscribeToStream,
     }
 }
 
-module.exports = { createSessionVoiceManager };
+module.exports = { createSessionManager };

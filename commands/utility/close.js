@@ -38,11 +38,10 @@ module.exports = {
 			return;
 		}
 
-		await interaction.client.sessionVoiceManager.stopVoiceCapture(session.sessionId, true);
+		await interaction.client.sessionManager.finishMeeting(session.sessionId);
 		await interaction.reply({
 			content: 'The meeting is over. Thank you for participating.',
 		});
-		sessionStore.deleteSession(session.messageId);
-		console.log('session closed and deleted.');
+		console.log('meeting finished.');
 	},
 };

@@ -21,7 +21,23 @@ function isValidWav(audioBuffer) {
 function createTranscriptWorker({sttBaseUrl, fetchImpl, fsImpl, pathImpl}) {
     const meetingsMap = new Map();
 
-    async function startMeeting(meetingId) {
+    async function writeTranscriptHeader(transcriptPath, { meetingId, channelId, meetingStartIso, participantDisplayNames }) {
+        const header = {
+            type: 'metadata',
+            meetingId,
+            channelId: channelId ?? null,
+            meetingStartIso,
+            participantDisplayNames: Array.isArray(participantDisplayNames) ? participantDisplayNames : [],
+        };
+        try {
+            await fsImpl.promises.writeFile(transcriptPath, JSON.stringify(header) + '\n', 'utf8');
+        } catch (error) {
+            console.error('Error writing transcript header:', error);
+            throw error;
+        }
+    }
+
+    async function startMeeting(meetingId, metadata = {}) {
         try {
             await fsImpl.promises.mkdir(pathImpl.join(__dirname, 'transcripts'), { recursive: true });
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -39,6 +55,17 @@ function createTranscriptWorker({sttBaseUrl, fetchImpl, fsImpl, pathImpl}) {
                     processingPromise: null,
                 }
             });
+
+            const meetingStartIso = (metadata.meetingStartIso != null)
+                ? metadata.meetingStartIso
+                : new Date().toISOString();
+            await writeTranscriptHeader(transcriptPath, {
+                meetingId,
+                channelId: metadata.channelId,
+                meetingStartIso,
+                participantDisplayNames: metadata.participantDisplayNames,
+            });
+
             return { transcriptPath };
         } catch (error) {
             console.error('Error starting meeting:', error);
