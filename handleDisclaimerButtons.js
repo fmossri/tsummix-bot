@@ -27,7 +27,7 @@ const handleDisclaimerButtons = async (interaction) => {
 				await session.originalInteraction.followUp({
 					content: 'All users have accepted the disclaimer. Starting recording.',
 				});
-                interaction.client.sessionVoiceManager.startVoiceCapture(messageId);
+                interaction.client.sessionManager.startMeeting(messageId);
 				return;
 			}
 		}

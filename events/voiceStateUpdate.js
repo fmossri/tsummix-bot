@@ -12,7 +12,7 @@ module.exports = {
             if (!sessionJoined.sessionData.participantIds.includes(newState.user.id)) {
                 return;
             }
-            client.sessionVoiceManager.resubscribeToStream(sessionJoined.sessionId, newState.member.id);
+            client.sessionManager.resubscribeToStream(sessionJoined.sessionId, newState.member.id);
         }
     },
 };
