@@ -2,46 +2,48 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 
-function formatReportLine(stringsObject, widthsObject, report) {
-    let { timeString, nameString, textString } = stringsObject;
-    const { timeColumnWidth, nameColumnWidth, textColumnWidth } = widthsObject;
-    const namePad = nameColumnWidth - nameString.length - 1;
+function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
 
-    if (textString.length > textColumnWidth) {
-        const firstLineText = textString.slice(0, textColumnWidth);
-        textString = textString.slice(textColumnWidth);
-        const firstLine = `${' '}${timeString}${' '}|${' '}${nameString}${' '.repeat(namePad)}|${' '}${firstLineText}`;
-        report.push(firstLine);
-        while (textString.length > textColumnWidth) {
-            let lineText;
-            if (textString[textColumnWidth] === ' ') {
-                lineText = textString.slice(0, textColumnWidth);
-                textString = textString.slice(textColumnWidth);
+    function formatReportLine(stringsObject, widthsObject, report) {
+        let { timeString, nameString, textString } = stringsObject;
+        const { timeColumnWidth, nameColumnWidth, textColumnWidth } = widthsObject;
+        const namePad = nameColumnWidth - nameString.length - 1;
+
+        if (textString.length > textColumnWidth) {
+            const firstLineText = textString.slice(0, textColumnWidth);
+            textString = textString.slice(textColumnWidth);
+            const firstLine = `${' '}${timeString}${' '}|${' '}${nameString}${' '.repeat(namePad)}|${' '}${firstLineText}`;
+            report.push(firstLine);
+            while (textString.length > textColumnWidth) {
+                let lineText;
+                if (textString[textColumnWidth] === ' ') {
+                    lineText = textString.slice(0, textColumnWidth);
+                    textString = textString.slice(textColumnWidth);
+                }
+                else {
+                    lineText = textString.slice(0, textColumnWidth - 1) + '-';
+                    textString = textString.slice(textColumnWidth - 1);
+                }
+                const line = `${' '}${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${lineText}`;
+                report.push(line);
             }
-            else {
-                lineText = textString.slice(0, textColumnWidth - 1) + '-';
-                textString = textString.slice(textColumnWidth - 1);
+            if (textString.length > 0) {
+                const lastLine = `${' '}${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${textString}`;
+                report.push(lastLine);
             }
-            const line = `${' '}${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${lineText}`;
+        }
+        else {
+            const lineText = textString;
+            const line = `${' '}${timeString}${' '}|${' '}${nameString}${' '.repeat(namePad)}|${' '}${lineText}`;
             report.push(line);
         }
-        if (textString.length > 0) {
-            const lastLine = `${' '}${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${textString}`;
-            report.push(lastLine);
-        }
     }
-    else {
-        const lineText = textString;
-        const line = `${' '}${timeString}${' '}|${' '}${nameString}${' '.repeat(namePad)}|${' '}${lineText}`;
-        report.push(line);
-    }
-}
 
-async function generateReport(transcriptPath) {
-    try {
-        let report = [];
-        const textStream = fs.createReadStream(transcriptPath);
-        const rl = readline.createInterface({input: textStream, crlfDelay: Infinity});
+    async function generateReport(transcriptPath) {
+        try {
+            let report = [];
+            const textStream = fsImpl.createReadStream(transcriptPath);
+            const rl = readline.createInterface({input: textStream, crlfDelay: Infinity});
         let ifFirstLine = true;
         let sessionId = null;
         let channelId = null;
@@ -61,18 +63,21 @@ async function generateReport(transcriptPath) {
                     throw new Error(`Invalid transcript file: first line must be type = metadata`);
                 }
                 
-                ({ meetingId: sessionId, channelId, meetingStartIso, participantDisplayNames }) = JSONLine;
+                sessionId = JSONLine.meetingId;
+                channelId = JSONLine.channelId;
+                meetingStartIso = JSONLine.meetingStartIso;
+                participantDisplayNames = JSONLine.participantDisplayNames;
                 if (!sessionId || !channelId || !meetingStartIso || !participantDisplayNames?.length) {
                     throw new Error(`Invalid transcript file: metadata must contain meetingId, channelId, meetingStartIso, and participantDisplayNames (with at least one participant)`);
                 }
                 timeColumnWidth = " hh:mm:ss ".length;
                 nameColumnWidth = Math.max(...participantDisplayNames.map(name => name.length)) + 2;
                 textColumnWidth = 69 - timeColumnWidth - nameColumnWidth;
-                const projectRoot = path.join(__dirname, '..', '..');
+                const projectRoot = pathImpl.join(__dirname, '..', '..');
     
-                fs.mkdirSync(path.join(projectRoot, 'reports'), { recursive: true });
+                fsImpl.mkdirSync(pathImpl.join(projectRoot, 'reports'), { recursive: true });
                 const reportPathDate = meetingStartIso.slice(0, -5).replace(/\D/g, '');
-                reportPath = path.join(projectRoot, 'reports', `meeting-report_${channelId}_${reportPathDate}.md`);
+                reportPath = pathImpl.join(projectRoot, 'reports', `meeting-report_${channelId}_${reportPathDate}.md`);
 
                 const dateTimeStr = new Date(meetingStartIso).toLocaleString('en-GB', {
                     day: 'numeric',
@@ -114,14 +119,15 @@ async function generateReport(transcriptPath) {
         }
 
         report.push('```');
-        fs.writeFileSync(reportPath, report.join('\n'), 'utf8');
+        fsImpl.writeFileSync(reportPath, report.join('\n'), 'utf8');
         return reportPath;
-    } catch (error) {
-        console.error('Error generating report:', error);
-        throw error;
+        } catch (error) {
+            console.error('Error generating report:', error);
+            throw error;
+        }
     }
+
+    return { generateReport };
 }
 
-module.exports = {
-    generateReport,
-};
+module.exports = { createReportGenerator };

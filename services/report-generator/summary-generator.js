@@ -1,7 +1,8 @@
 require('dotenv').config();
 const fs = require('node:fs');
 
-const adapters = {
+function createSummaryGenerator({ fsImpl = fs, adaptersOverride } = {}) {
+    const adapters = adaptersOverride ?? {
     ollama: require('./llm-adapters/ollama-adapter.js'),
 }
 
@@ -117,7 +118,7 @@ async function generateSummary(reportPath, options = {}) {
         throw new Error(`Invalid LLM_PROVIDER: ${process.env.LLM_PROVIDER}`);
     }
 
-    const report = fs.readFileSync(reportPath, 'utf8');
+    const report = await fsImpl.promises.readFile(reportPath, 'utf8');
 
     const truncationEnabled = parseBool(process.env.LLM_TRUNCATION_ENABLED, false);
     const maxChars = parsePositiveInt(process.env.LLM_TRUNCATION_MAX_CHARS);
@@ -158,4 +159,7 @@ async function generateSummary(reportPath, options = {}) {
     return await callLLM(system, user);
 }
 
-module.exports = { generateSummary };
+    return { generateSummary };
+}
+
+module.exports = { createSummaryGenerator };
