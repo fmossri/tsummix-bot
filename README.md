@@ -2,7 +2,7 @@
 
 **Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Test suite in place (unit + integration); docs and roadmap in `docs/` (see .gitignore).
 
-A Discord bot that implements STT and summarization capabilities.
+Tsummix: A Discord bot that implements STT and summarization capabilities.
 
 ---
 
@@ -124,12 +124,13 @@ Copy `.env-example` to `.env` and set:
    ```bash
    node deploy-commands.js
    ```
-2. Start the bot:
+2. Start the bot and STT wrapper together, or only one:
    ```bash
-   node index.js
+   npm start              # bot + STT wrapper
+   npm run start:bot     # only Node bot
+   npm run start:stt   # only STT wrapper
    ```
-
-You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node deploy-commands.js"`.
+   To run from the shell without `npm` or `node`, link once: `npm link`. Then run `tsummix run`, `tsummix run bot`, or `tsummix run stt`.
 
 **Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM).
 
@@ -190,6 +191,7 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 | `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |
 | `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the coordinator wires), report and summary generation. Coordinator owns voice and capture. |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
+| `scripts/tsummix.js` | CLI: `tsummix run` (both), `tsummix run bot`, `tsummix run stt`. Use after `npm link`. |
 | `scripts/env.sh` | Unix: activate venv + set `LD_LIBRARY_PATH` for CUDA libs |
 | `scripts/env.bat` | Windows: activate venv + set `PATH` for CUDA libs |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |

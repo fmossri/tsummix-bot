@@ -3,8 +3,14 @@
   "version": "0.2.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "tsummix": "scripts/tsummix.js"
+  },
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "run": "node scripts/tsummix.js run",
+    "start:bot": "node scripts/tsummix.js run bot",
+    "start:stt": "node scripts/tsummix.js run stt"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
