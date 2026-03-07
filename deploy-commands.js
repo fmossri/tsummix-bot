@@ -35,10 +35,16 @@ const rest = new REST().setToken(token);
 	try {
 		console.log(`Started refreshing ${commands.length} application (/) commands.`);
 
-		// The put method is used to fully refresh all commands in the guild with the current set
-		const data = await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
-
-		console.log(`Successfully reloaded ${data.length} application (/) commands.`);
+		if (guildId) {
+			// Deploy to a single guild (instant; useful for development / dry dock)
+			const data = await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
+			console.log(`Successfully reloaded ${data.length} application (/) commands in guild ${guildId}.`);
+		}
+		else {
+			// Deploy globally (commands available in all servers where the bot is invited; can take up to 1 hour to propagate)
+			const data = await rest.put(Routes.applicationCommands(clientId), { body: commands });
+			console.log(`Successfully reloaded ${data.length} application (/) commands globally.`);
+		}
 	}
 	catch (error) {
 		// And of course, make sure you catch and log any errors!

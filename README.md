@@ -95,7 +95,7 @@ Copy `.env-example` to `.env` and set:
 |--------------------------|-------------|
 | `DISCORD_TOKEN`          | Bot token (Developer Portal → Bot → Reset Token) |
 | `APP_ID`                 | Application ID (Developer Portal → General Information) |
-| `SERVER_ID`              | Guild ID where slash commands are registered |
+| `SERVER_ID`              | Optional. If set, `deploy-commands.js` registers slash commands in this guild only (instant). If unset, commands are registered globally (all servers; propagation can take up to 1 hour). |
 | `PUBLIC_KEY`             | Application public key (Developer Portal → General Information) |
 | `STT_MODEL_ID`           | Model to load: built-in size (e.g. `medium`), HF repo id (e.g. `dwhoelz/whisper-medium-pt-ct2`), or local path to a CTranslate2 model dir |
 | `STT_DOWNLOAD_PATH`      | Where to download/cache models when using a size or HF repo (default `.models/`). Ignored when `STT_MODEL_ID` is a local path. First run may download. |
