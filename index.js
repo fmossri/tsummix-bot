@@ -1,7 +1,8 @@
 require('dotenv').config();
+const fetch = import('node-fetch');
 const fs = require('node:fs');
 const path = require('node:path');
-const fetch = require('node-fetch');
+
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const { sessionStore } = require('./session.js');
 const { createSessionManager } = require('./services/session-manager/session-manager.js');

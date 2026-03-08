@@ -42,8 +42,8 @@ function runSTT() {
 }
 
 function runBoth() {
-	const nodeProc = runNode();
-	const pythonProc = runPython();
+	const nodeProc = runBot();
+	const pythonProc = runSTT();
 	process.on('SIGINT', () => {
 		nodeProc.kill('SIGINT');
 		pythonProc.kill('SIGINT');

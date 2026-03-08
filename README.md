@@ -1,8 +1,8 @@
-# discord-meeting-bot
+# Tsummix
 
-**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Test suite in place (unit + integration); docs and roadmap in `docs/` (see .gitignore).
+**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Test suite in place (unit + integration).
 
-Tsummix: A Discord bot that implements STT and summarization capabilities.
+A Discord bot that implements STT and summarization capabilities.
 
 ---
 
@@ -16,7 +16,7 @@ Tsummix: A Discord bot that implements STT and summarization capabilities.
 
 ### STT wrapper (Python)
 
-- FastAPI service that loads a faster-whisper model at startup and exposes **`GET /health`** (model id, device, ready) and **`POST /transcribe`** (JSON + base64 audio; returns segments and metrics).
+- FastAPI service that loads a [faster-whisper](https://github.com/SYSTRAN/faster-whisper) model at startup and exposes **`GET /health`** (model id, device, ready) and **`POST /transcribe`** (JSON + base64 audio; returns segments and metrics).
 - Model config via env: built-in size, Hugging Face repo id, or local path; cache directory (default `.models/`).
 
 ### Transcript worker (Node.js)
@@ -50,7 +50,7 @@ After participants accept a disclaimer, the coordinator joins the voice channel 
 - **Node.js** 18+ (or recent LTS)
 - **Python 3.12+** (for the STT wrapper)
 - **Discord:** [Create an application](https://discord.com/developers/applications), add a bot user, invite it to your server with the right permissions
-- **GPU (optional):** For `STT_DEVICE=cuda` you need a CUDA-capable GPU and, on WSL/Linux, the venv CUDA libs on the loader path (see Installation note)
+- **GPU (optional):** For `STT_DEVICE=cuda` you need a CUDA-capable GPU and the venv CUDA libs on the loader path (see Installation note)
 
 ---
 
@@ -76,14 +76,19 @@ After participants accept a disclaimer, the coordinator joins the voice channel 
 4. **Python STT wrapper**
    ```bash
    python3 -m venv .venv
-   source .venv/bin/activate   # Windows: .venv\Scripts\activate. Alternatively, use `source scripts/env.sh` (also sets CUDA libs if needed).
+   source .venv/bin/activate   # Windows: .venv\Scripts\activate
    pip install -r requirements.txt
    ```
+   The default `requirements.txt` includes CUDA-related pip packages (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). For **CPU-only** (e.g. no NVIDIA GPU), remove those two lines from `requirements.txt` before installing them.
 
-   **GPU (CUDA):** If you use `STT_DEVICE=cuda` and get `Library libcublas.so.12 is not found`, the venv’s CUDA libs are not on the loader path.  
-   - **Unix (Linux/macOS/WSL):** Run `source scripts/env.sh` or `. scripts/env.sh` before starting Python; it activates the venv and sets `LD_LIBRARY_PATH` to the venv’s `nvidia/cublas/lib` and `nvidia/cudnn/lib`.  
-   - **Windows (cmd):** Run `scripts\env.bat` to activate the venv and add those dirs to `PATH`.  
-   If your venv or Python version path differs, edit the script.
+   **GPU (CUDA):** The STT app and scripts import `stt-wrapper/cuda_env.py` first, which sets `LD_LIBRARY_PATH` if the libs aren’t already findable. That aims to fix a bug where whisper couldn't find cuda libraries in venv.
+
+5. **LLM (summaries)**
+   Tsummix uses an LLM to generate meeting summaries. It's built to be **LLM-agnostic** (local models via Ollama or Hugging Face, or inference APIs like Gemini, GPT, DeepSeek, via env and credentials); **currently it only supports local models through [Ollama](https://ollama.com/download)**. Install Ollama for your OS, ensure the service is running (on many installs it runs automatically), then pull your preferred model:
+   ```bash
+   ollama pull model
+   ```
+   Set `OLLAMA_MODEL=model` and other LLM-related variables in `.env` (see **Configuration**).
 
 ---
 
@@ -124,7 +129,7 @@ Copy `.env-example` to `.env` and set:
    ```bash
    node deploy-commands.js
    ```
-2. Start the bot and STT wrapper together, or only one:
+2. Start the bot and STT-Wrapper:
    ```bash
    npm start              # bot + STT wrapper
    npm run start:bot     # only Node bot
@@ -140,14 +145,11 @@ Copy `.env-example` to `.env` and set:
   ```bash
   uvicorn stt-wrapper.app:app --reload
   ```
-- Run the simple REPL benchmark against WAV files (WAVs under `tests/audio-samples/` or path in script):
-  ```bash
-  python3 stt-wrapper/repl.py
-  ```
-- Run the standalone model benchmark script (measures model/options latency only, no HTTP):
+- Run the standalone model benchmark script (measures model/options latency only, no HTTP). Use **python** (not bash):
   ```bash
   python3 scripts/stt-wrapper/model_benchmark.py
   ```
+  The app and this benchmark set `LD_LIBRARY_PATH` for the venv’s CUDA libs at startup.
 - Run a manual smoke test against the wrapper HTTP API (`/health` and `/transcribe`):
   ```bash
   python3 scripts/stt-wrapper/smoke_stt_wrapper.py
@@ -155,10 +157,12 @@ Copy `.env-example` to `.env` and set:
 
 **Transcript worker**
 
-- Run the worker HTTP server (from repo root, with STT wrapper running; optional if bot uses worker in-process):
+- **In progress** (optional) Run the worker HTTP server: from repo root, with STT wrapper running:
   ```bash
   node services/transcript-worker/index.js
   ```
+  
+
 ---
 
 ## Commands
@@ -181,7 +185,6 @@ Copy `.env-example` to `.env` and set:
 | `session.js` | In-memory session store (`sessionStore`) |
 | `coordinator/bot-coordinator.js` | Orchestrates meeting flow: start/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
-| `stt-wrapper/repl.py` | Simple REPL-style script: run transcription on WAV files |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
 | `services/transcript-worker/transcript-worker.js` | Transcript Worker: per-meeting queue, STT client, JSONL transcript |
@@ -192,8 +195,6 @@ Copy `.env-example` to `.env` and set:
 | `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the coordinator wires), report and summary generation. Coordinator owns voice and capture. |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
 | `scripts/tsummix.js` | CLI: `tsummix run` (both), `tsummix run bot`, `tsummix run stt`. Use after `npm link`. |
-| `scripts/env.sh` | Unix: activate venv + set `LD_LIBRARY_PATH` for CUDA libs |
-| `scripts/env.bat` | Windows: activate venv + set `PATH` for CUDA libs |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |
 | `.env-example` | Example env vars (Discord + STT); copy to `.env` |
 
