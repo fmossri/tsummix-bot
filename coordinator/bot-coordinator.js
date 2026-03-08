@@ -37,15 +37,15 @@ function createBotCoordinator(sessionStore) {
             });
             return;
         }
+        const confirmButton = new ButtonBuilder()
+            .setCustomId('close-meeting-confirm')
+            .setLabel('Confirm')
+            .setStyle(ButtonStyle.Success);
+        const confirmRow = new ActionRowBuilder().addComponents(confirmButton);
         const replyMessage = await interaction.reply({
             content: 'Are you sure you want to close the meeting?',
             flags: MessageFlags.Ephemeral,
-            components: [
-                new ButtonBuilder()
-                    .setCustomId('close-meeting-confirm')
-                    .setLabel('Confirm')
-                    .setStyle(ButtonStyle.Success),
-            ],
+            components: [confirmRow],
         });
 
         const replyMessageObject = await replyMessage.fetch();
@@ -95,6 +95,7 @@ function createBotCoordinator(sessionStore) {
             finished: false,
 			participantIds: [],
             rejectedIds: [],
+            dmIds: [],
             participantStates: new Map(),
 			voiceChannelId: voiceChannel.id,
 			originalInteraction: interaction,
@@ -298,21 +299,18 @@ function createBotCoordinator(sessionStore) {
         switch (interaction.customId) {
             case 'disclaimer-accept':
                 if (!sessionState.participantIds.includes(userId) && !sessionState.rejectedIds.includes(userId)) {
-                    if (await registerParticipant(messageId, userId, interaction)) {
-
-                        await interaction.reply({
-                            content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.',
-                            flags: MessageFlags.Ephemeral,
-                        });
-                        break;
-                    }
-                    else {
-                        await interaction.reply({
-                            content: 'An error occurred while adding you as a participant.',
-                            flags: MessageFlags.Ephemeral,
-                        });
-                        break;
-                    }
+					await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+					if (await registerParticipant(messageId, userId, interaction)) {
+						await interaction.editReply({
+							content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.',
+						});
+						break;
+					} else {
+						await interaction.editReply({
+							content: 'An error occurred while adding you as a participant.',
+						});
+						break;
+					}
                 }
             
                 else {await interaction.deferUpdate(); break;}
@@ -336,7 +334,7 @@ function createBotCoordinator(sessionStore) {
                         clearTimeout(sessionState.timeoutId);
                         sessionState.timeoutId = null;
                     }
-                    await interaction.deferReply({ ephemeral: true });
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                     stopVoiceCapture(sessionId);
                     const { reportPath, summary } = await interaction.client.sessionManager.closeSession(sessionId);
                     await interaction.editReply({

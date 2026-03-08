@@ -216,7 +216,7 @@ describe('Bot Coordinator', () => {
 			expect(interaction.reply).not.toHaveBeenCalled();
 		});
 
-		it('replies with Disclaimer accepted when disclaimer-accept and registerParticipant succeeds', async () => {
+		it('defers and then edits reply with Disclaimer accepted when disclaimer-accept and registerParticipant succeeds', async () => {
 			const sessionState = {
 				participantIds: [],
 				rejectedIds: [],
@@ -240,9 +240,9 @@ describe('Bot Coordinator', () => {
 
 			await coordinator.handleButtonInteraction(interaction);
 
-			expect(interaction.reply).toHaveBeenCalledWith({
+			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+			expect(interaction.editReply).toHaveBeenCalledWith({
 				content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.',
-				flags: MessageFlags.Ephemeral,
 			});
 		});
 
@@ -344,7 +344,7 @@ describe('Bot Coordinator', () => {
 
 			await coordinator.handleButtonInteraction(interaction);
 
-			expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
 			expect(interaction.client.sessionManager.closeSession).toHaveBeenCalledWith(sessionId);
 			expect(interaction.editReply).toHaveBeenCalledWith({
 				content: expect.stringContaining('Meeting summary.'),
