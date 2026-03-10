@@ -98,13 +98,17 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
             if (!JSONLine.text?.trim()) {
                 continue;
             }
-            const startMs = JSONLine.startMs ?? 0;
-            const realTime = new Date(meetingStartIso).getTime() + startMs;
-            const timeString = new Date(realTime).toLocaleTimeString('pt-BR', { 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                second: '2-digit', 
-                hour12: false });
+            const timestampMs = typeof JSONLine.clockTimeMs === 'number'
+                ? JSONLine.clockTimeMs
+                : null;
+            const timeString = timestampMs === null
+                ? '00:00:00'
+                : new Date(timestampMs).toLocaleTimeString('pt-BR', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false,
+                });
             const stringsToFormat = {
                 timeString: timeString,
                 nameString: JSONLine.displayName ?? 'Undefined',
