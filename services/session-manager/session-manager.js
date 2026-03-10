@@ -6,7 +6,53 @@ function createSessionManager({
 	createSummaryGenerator,
 	transcriptWorker,
 }) {
-	const sessionStates = new Map();
+    const sessionStates = new Map();
+
+    function cutChunk(sessionId, { participantId, participantState }, targetSamples) {
+        if (!participantState) {
+            console.error('participant state not found.', participantId);
+            return false;
+        }
+        const participantData = {
+            participantId: participantId,
+            displayName: participantState.displayName,
+        };
+        const TARGET_BYTES = targetSamples * 2;
+        const SAMPLE_RATE = 16000;
+
+        let samplesBuffer = participantState.chunkerState.samplesBuffer;
+        let samplesInBuffer = participantState.chunkerState.samplesInBuffer;
+        let totalSamplesEmitted = participantState.chunkerState.totalSamplesEmitted;
+        let chunkClockTimeMs = participantState.chunkerState.chunkClockTimeMs;
+
+        try {
+            const chunkPCMBuffer = samplesBuffer.subarray(0, TARGET_BYTES);
+            samplesBuffer = samplesBuffer.subarray(TARGET_BYTES);
+            const wavBuffer = convertPCMToWav(chunkPCMBuffer, SAMPLE_RATE);
+            const chunkStartSample = totalSamplesEmitted;
+            const chunkStartTimeMs = (chunkStartSample / SAMPLE_RATE) * 1000;
+
+            const chunk = {
+                chunkId: getNextChunkId(sessionId),
+                participantData: participantData,
+                chunkClockTimeMs: chunkClockTimeMs,
+                chunkStartTimeMs: chunkStartTimeMs,
+                audio: wavBuffer,
+            };
+            totalSamplesEmitted += targetSamples;
+            samplesInBuffer -= targetSamples;
+            chunkClockTimeMs = Date.now();
+            participantState.chunkerState.chunkClockTimeMs = chunkClockTimeMs;
+            participantState.chunkerState.samplesBuffer = samplesBuffer;
+            participantState.chunkerState.samplesInBuffer = samplesInBuffer;
+            participantState.chunkerState.totalSamplesEmitted = totalSamplesEmitted;
+            return chunk;
+        }
+        catch (error) {
+            console.error('error cutting chunk.', error);
+            throw error;
+        }
+    }
 
 	function getNextChunkId(sessionId) {
 		const sessionState = sessionStates.get(sessionId);
@@ -23,63 +69,39 @@ function createSessionManager({
 			console.error('session not found.', sessionId);
 			return false;
 		}
-		const TARGET_CHUNK_SECONDS = 30;
-		const SAMPLE_RATE = 16000;
-		const TARGET_SAMPLES = TARGET_CHUNK_SECONDS * SAMPLE_RATE;
-		const TARGET_BYTES = TARGET_SAMPLES * 2;
 		const participantState = sessionState.participantStates.get(participantId);
 		if (!participantState) {
 			console.error('participant state not found.', participantId);
 			return false;
 		}
+		const TARGET_SAMPLES = 30 * 16000;
+        let chunkClockTimeMs = null;
 		try {
-			const participantData = {
-				participantId: participantId,
-				displayName: participantState.displayName,
-			};
-
-			let samplesBuffer = participantState.chunkerState.samplesBuffer;
-			let samplesInBuffer = participantState.chunkerState.samplesInBuffer;
-			let totalSamplesEmitted = participantState.chunkerState.totalSamplesEmitted;
-            let chunkClockTimeMs = null;
 			const pcmStream = participantState.pcmStream;
 			pcmStream.on('data', (pcmBuffer) => {
 				let samplesInThisBuffer = pcmBuffer.length / 2;
-                if (samplesInBuffer === 0) {
-                    chunkClockTimeMs = Date.now();
-                    participantState.chunkerState.chunkClockTimeMs = chunkClockTimeMs;
+                if (participantState.chunkerState.samplesInBuffer === 0) {
+                    participantState.chunkerState.chunkClockTimeMs = Date.now();
                 }
-				samplesBuffer = Buffer.concat([samplesBuffer, pcmBuffer]);
-				samplesInBuffer += samplesInThisBuffer;
+                participantState.chunkerState.samplesBuffer = Buffer.concat([
+                    participantState.chunkerState.samplesBuffer,
+                    pcmBuffer
+                ]);
+				participantState.chunkerState.samplesInBuffer += samplesInThisBuffer;
 
-				while (samplesInBuffer >= TARGET_SAMPLES) {
-
-					const chunkPCMBuffer = samplesBuffer.subarray(0, TARGET_BYTES);
-					samplesBuffer = samplesBuffer.subarray(TARGET_BYTES);
-					const wavBuffer = convertPCMToWav(chunkPCMBuffer, SAMPLE_RATE);
-					const chunkStartSample = totalSamplesEmitted;
-					const chunkEndSample = chunkStartSample + TARGET_SAMPLES;
-					const chunkStartTimeMs = (chunkStartSample / SAMPLE_RATE) * 1000;
-					const chunkEndTimeMs = (chunkEndSample / SAMPLE_RATE) * 1000;
-
-					const chunk = {
-						chunkId: getNextChunkId(sessionId),
-						participantData: participantData,
-                        chunkClockTimeMs: chunkClockTimeMs,
-						chunkStartTimeMs: chunkStartTimeMs,
-						chunkEndTimeMs: chunkEndTimeMs,
-						audio: wavBuffer,
-					};
-					sessionState.chunksQueue.push(chunk);
-					ensureProcessing(sessionId);
-					totalSamplesEmitted += TARGET_SAMPLES;
-					samplesInBuffer -= TARGET_SAMPLES;
-                    chunkClockTimeMs = Date.now();
-                    participantState.chunkerState.chunkClockTimeMs = chunkClockTimeMs;
-					participantState.chunkerState.samplesBuffer = samplesBuffer;
-					participantState.chunkerState.samplesInBuffer = samplesInBuffer;
-					participantState.chunkerState.totalSamplesEmitted = totalSamplesEmitted;
+				while (participantState.chunkerState.samplesInBuffer >= TARGET_SAMPLES) {
+                    try {
+                        const participant = { participantId: participantId, participantState: participantState };
+                        const chunk = cutChunk(sessionId, participant, TARGET_SAMPLES);
+                        sessionState.chunksQueue.push(chunk);
+                        ensureProcessing(sessionId);
+                    }
+                    catch (error) {
+                        console.error('error cutting chunk.', error);
+                        return false;
+                    }
 				}
+                return true;
 			});
 		} catch (error) {
 			console.error('error chunking stream.', error);

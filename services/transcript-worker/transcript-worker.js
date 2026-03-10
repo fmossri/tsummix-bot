@@ -91,9 +91,6 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			if (typeof chunk.chunkId !== 'number') {
 				throw new Error('Chunk ID must be a number');
 			}
-			if (chunk.chunkStartTimeMs >= chunk.chunkEndTimeMs) {
-				throw new Error('Chunk start time must be before end time');
-			}
 			if (!isValidWav(chunk.audio)) {
 				throw new Error('Invalid WAV buffer; must be mono 16kHz PCM');
 			}
@@ -172,7 +169,6 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 						meetingId: meetingId,
 						chunkId: chunk.chunkId,
 						chunkStartTimeMs: chunk.chunkStartTimeMs,
-						chunkEndTimeMs: chunk.chunkEndTimeMs,
 						audio: audioBuffer,
 					}),
 				});
