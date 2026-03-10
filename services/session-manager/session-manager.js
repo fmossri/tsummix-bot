@@ -221,6 +221,7 @@ function createSessionManager({
 			});
 			const reportPath = await reportGenerator.generateReport(transcriptPath);
 			const summary = await summaryGenerator.generateSummary(reportPath);
+			await reportGenerator.insertSummary(reportPath, summary);
 			sessionStates.delete(sessionId);
 			console.log('session closed.');
 			return { reportPath, summary };

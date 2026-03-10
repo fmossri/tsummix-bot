@@ -131,7 +131,46 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
         }
     }
 
-    return { generateReport };
+    async function insertSummary(reportPath, summaryText) {
+        const readFile =
+            fsImpl?.promises?.readFile
+                ? fsImpl.promises.readFile.bind(fsImpl.promises)
+                : (p, enc) => Promise.resolve(fsImpl.readFileSync(p, enc));
+        const writeFile =
+            fsImpl?.promises?.writeFile
+                ? fsImpl.promises.writeFile.bind(fsImpl.promises)
+                : (p, content, enc) => Promise.resolve(fsImpl.writeFileSync(p, content, enc));
+        const rename =
+            fsImpl?.promises?.rename
+                ? fsImpl.promises.rename.bind(fsImpl.promises)
+                : (from, to) => Promise.resolve(fsImpl.renameSync(from, to));
+
+        const markdown = await readFile(reportPath, 'utf8');
+        const lines = markdown.split('\n');
+        const codeFenceIdx = lines.findIndex((l) => l.trim() === '```text');
+        if (codeFenceIdx === -1) {
+            throw new Error('Report format error: could not find ```text code fence');
+        }
+
+        const summaryLines = String(summaryText ?? '').trim().length
+            ? String(summaryText).trim().split('\n')
+            : ['(No summary)'];
+
+        const updatedLines = [
+            ...lines.slice(0, codeFenceIdx),
+            '## Summary',
+            '',
+            ...summaryLines,
+            '',
+            ...lines.slice(codeFenceIdx),
+        ];
+
+        const tempPath = `${reportPath}.tmp`;
+        await writeFile(tempPath, updatedLines.join('\n'), 'utf8');
+        await rename(tempPath, reportPath);
+    }
+
+    return { generateReport, insertSummary };
 }
 
 module.exports = { createReportGenerator };
