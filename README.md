@@ -1,6 +1,6 @@
 # Tsummix
 
-**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Test suite in place (unit + integration).
+**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Transcript and report timestamps now reflect real (wall-clock) meeting time. Test suite in place (unit + integration).
 
 A Discord bot that implements STT and summarization capabilities.
 
@@ -24,15 +24,16 @@ A Discord bot that implements STT and summarization capabilities.
 
 ### Transcript worker (Node.js)
 
-- Per-meeting queue and HTTP client to the STT wrapper; writes JSONL transcript per meeting (header at close). API: `startTranscript`, `enqueueChunk`, `closeTranscript`.
-- Optional standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-meeting`**, **`/enqueue-chunk`**, **`/close-meeting`**. Bot typically uses the worker in-process via `createTranscriptWorker`.
+- Per-transcript queue and HTTP client to the STT wrapper; writes JSONL transcript per meeting/session (metadata header at start, segments as they are processed). API: `startTranscript(transcriptId, meetingStartTimeMs)`, `enqueueChunk(transcriptId, chunk)`, `closeTranscript(transcriptId, { channelId, participantDisplayNames })`.
+- Optional standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-transcript`**, **`/enqueue-chunk`**, **`/close-transcript`**. The bot typically uses the worker in-process via `createTranscriptWorker`.
 
 ### Transcript pretty-print & summarization
 
 - After `/close`, the session manager:
-  - Asks the transcript Worker to close the meeting and return the path to the JSONL transcript.
+  - Asks the transcript worker to close the transcript and return the path to the JSONL file.
   - Generates a human-readable Markdown report (`reports/meeting-report_*.md`) with a fixed-width table: **time | display name | text**, wrapping only the text column.
   - Calls a summarization helper that reads the report and calls a local LLM.
+  - Inserts the summary back into the same report file as a `## Summary` section placed immediately before the transcript table.
 - The first LLM provider is **Ollama** running **`phi3:mini`** locally:
   - Controlled by env vars like `LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `LLM_TEMPERATURE`.
   - Supports optional truncation for long meetings with `LLM_TRUNCATION_ENABLED`, `LLM_TRUNCATION_MAX_CHARS`, and a simple chunk‑and‑combine strategy.
@@ -193,8 +194,8 @@ Copy `.env-example` to `.env` and set:
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
-| `services/transcript-worker/transcript-worker.js` | Transcript Worker: per-meeting queue, STT client, JSONL transcript |
-| `services/transcript-worker/index.js` | Transcript Worker HTTP server: `/start-meeting`, `/enqueue-chunk`, `/close-meeting` |
+| `services/transcript-worker/transcript-worker.js` | Transcript worker: per-transcript queue, STT client, JSONL transcript lifecycle |
+| `services/transcript-worker/index.js` | Transcript worker HTTP server: `/start-transcript`, `/enqueue-chunk`, `/close-transcript` |
 | `services/report-generator/report-generator.js` | Generates pretty-printed Markdown reports (`reports/meeting-report_*.md`) from JSONL transcripts |
 | `services/report-generator/summary-generator.js` | Calls an LLM to summarize a report into a short Markdown summary |
 | `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |
