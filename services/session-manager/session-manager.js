@@ -1,5 +1,6 @@
 const { convertPCMToWav } = require('./convert-pcm-to-wav.js');
 const logger = require('../logger/logger');
+const appMetrics = require('../metrics/metrics');
 
 const COMPONENT = 'session-manager';
 
@@ -190,6 +191,7 @@ function createSessionManager({
 			return false;
 		}
 		try {
+			const meetingStartTimeMs = Date.now();
 			const sessionState = {
 				nextChunkId: 0,
 				chunksQueue: [],
@@ -199,16 +201,18 @@ function createSessionManager({
 				reportGenerator: createReportGenerator(),
 				summaryGenerator: createSummaryGenerator(),
 				participantStates: session.participantStates,
+				meetingStartTimeMs,
 			};
 			sessionStates.set(sessionId, sessionState);
-            const meetingStartTimeMs = Date.now();
 			sessionState.transcriptPath = await transcriptWorker.startTranscript(sessionId, meetingStartTimeMs);
+			appMetrics.incrementGauge('meetings_active', 1);
 			logger.info(COMPONENT, 'session_started', 'Session manager started', {
 				sessionId,
 				transcriptId: sessionId,
 			});
 			return true;
 		} catch (error) {
+			appMetrics.increment('session_start_failures_total');
 			logger.error(COMPONENT, 'session_start_failed', 'Failed to start session', {
 				sessionId,
 				errorClass: error.constructor?.name || 'Error',
@@ -239,6 +243,8 @@ function createSessionManager({
 			const reportPath = await reportGenerator.generateReport(transcriptPath);
 			const summary = await summaryGenerator.generateSummary(reportPath);
 			await reportGenerator.insertSummary(reportPath, summary);
+			appMetrics.observe('meeting_duration_ms', Date.now() - (sessionState.meetingStartTimeMs || Date.now()));
+			appMetrics.incrementGauge('meetings_active', -1);
 			sessionStates.delete(sessionId);
 			logger.info(COMPONENT, 'session_closed', 'Session manager closed', {
 				sessionId,
@@ -247,6 +253,7 @@ function createSessionManager({
 			});
 			return { reportPath, summary };
 		} catch (error) {
+			appMetrics.increment('session_close_failures_total');
 			logger.error(COMPONENT, 'session_close_failed', 'Close session failed', {
 				sessionId,
 				errorClass: error.constructor?.name || 'Error',

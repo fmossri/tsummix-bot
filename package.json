@@ -12,6 +12,11 @@
     "start:bot": "node scripts/tsummix.js run bot",
     "start:stt": "node scripts/tsummix.js run stt"
   },
+  "jest": {
+    "setupFiles": [
+      "<rootDir>/tests/jest.setup.js"
+    ]
+  },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.18.0",

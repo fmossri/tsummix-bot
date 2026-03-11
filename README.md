@@ -1,6 +1,6 @@
 # Tsummix
 
-**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Transcript and report timestamps now reflect real (wall-clock) meeting time. Test suite in place (unit + integration).
+**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Transcript and report timestamps reflect real (wall-clock) meeting time. Test suite in place (unit + integration).
 
 A Discord bot that implements STT and summarization capabilities.
 
@@ -26,6 +26,14 @@ A Discord bot that implements STT and summarization capabilities.
 
 - Per-transcript queue and HTTP client to the STT wrapper; writes JSONL transcript per meeting/session (metadata header at start, segments as they are processed). API: `startTranscript(transcriptId, meetingStartTimeMs)`, `enqueueChunk(transcriptId, chunk)`, `closeTranscript(transcriptId, { channelId, participantDisplayNames })`.
 - Optional standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-transcript`**, **`/enqueue-chunk`**, **`/close-transcript`**. The bot typically uses the worker in-process via `createTranscriptWorker`.
+
+### Observability (logs + in-process metrics)
+
+- Structured JSON logs emitted to stdout via `services/logger/logger.js`. Set `LOG_LEVEL` to control verbosity (`debug` | `info` | `warn` | `error`; default `info`).
+- Minimal in-process metrics via `services/metrics/metrics.js` (counters, gauges, histograms) updated alongside log calls. Includes:
+  - `worker_queue_depth` (gauge)
+  - `stt_latency_ms` (histogram)
+  - `stt_queue_wait_ms` (histogram; time from worker chunk receipt to processing start)
 
 ### Transcript pretty-print & summarization
 
@@ -141,7 +149,7 @@ Copy `.env-example` to `.env` and set:
    ```
    To run from the shell without `npm` or `node`, link once: `npm link`. Then run `tsummix run`, `tsummix run bot`, or `tsummix run stt`.
 
-**Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM).
+**Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM). By default tests set `LOG_LEVEL=error` to keep output readable; override with `LOG_LEVEL=info npm test` when debugging.
 
 **STT wrapper**
 
@@ -194,6 +202,8 @@ Copy `.env-example` to `.env` and set:
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
+| `services/logger/logger.js` | Structured JSON logger (stdout) with `LOG_LEVEL` filtering |
+| `services/metrics/metrics.js` | In-process metrics (counters/gauges/histograms) for observability |
 | `services/transcript-worker/transcript-worker.js` | Transcript worker: per-transcript queue, STT client, JSONL transcript lifecycle |
 | `services/transcript-worker/index.js` | Transcript worker HTTP server: `/start-transcript`, `/enqueue-chunk`, `/close-transcript` |
 | `services/report-generator/report-generator.js` | Generates pretty-printed Markdown reports (`reports/meeting-report_*.md`) from JSONL transcripts |
@@ -202,6 +212,7 @@ Copy `.env-example` to `.env` and set:
 | `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the coordinator wires), report and summary generation. Coordinator owns voice and capture. |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
 | `scripts/tsummix.js` | CLI: `tsummix run` (both), `tsummix run bot`, `tsummix run stt`. Use after `npm link`. |
+| `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=error` for test runs |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |
 | `.env-example` | Example env vars (Discord + STT); copy to `.env` |
 

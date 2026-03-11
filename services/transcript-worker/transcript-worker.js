@@ -1,5 +1,6 @@
 const wav = require('node-wav');
 const logger = require('../logger/logger');
+const appMetrics = require('../metrics/metrics');
 
 const WAV_SAMPLE_RATE = 16000;
 const COMPONENT = 'transcript-worker';
@@ -20,6 +21,12 @@ function isValidWav(audioBuffer) {
 
 function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 	const transcriptsMap = new Map();
+
+	function getTotalQueueDepth() {
+		let sum = 0;
+		for (const t of transcriptsMap.values()) sum += t.chunksQueue.length;
+		return sum;
+	}
 
 	async function writeTranscriptHeader(transcriptPath, { transcriptId, channelId, meetingStartIso, participantDisplayNames }) {
 		const header = {
@@ -110,7 +117,10 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			chunk.displayName = chunk.participantData.displayName;
 			chunk.segmentBuffer = [];
 			chunk.retryCount = 0;
+			chunk.receivedAtMs = Date.now();
 			transcript.chunksQueue.push(chunk);
+			appMetrics.increment('chunks_enqueued_total');
+			appMetrics.set('worker_queue_depth', getTotalQueueDepth());
 
 			logger.debug(COMPONENT, 'chunk_enqueued', 'Chunk enqueued', {
 				transcriptId,
@@ -122,6 +132,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				ensureProcessing(transcriptId);
 			}
 		} catch (error) {
+			appMetrics.increment('chunk_enqueue_validation_failures_total');
 			logger.error(COMPONENT, 'chunk_enqueue_failed', 'Chunk validation or enqueue failed', {
 				transcriptId,
 				chunkId: chunk?.chunkId,
@@ -157,6 +168,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			transcript.processedChunks = [];
 			transcript.transcriptState.processedSinceFlush = 0;
 		} catch (error) {
+			appMetrics.increment('transcript_flush_failures_total');
 			logger.error(COMPONENT, 'flush_failed', 'Failed to write transcript segments to file', {
 				transcriptId,
 				errorClass: error.constructor?.name || 'Error',
@@ -167,6 +179,8 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 	}
 
 	async function processNextChunk(transcriptId) {
+		let inSttAttempt = false;
+		let countedCall = false;
 		try {
 			if (!transcriptsMap.has(transcriptId)) {
 				throw new Error('Transcript not found');
@@ -180,8 +194,12 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			const postUrl = sttBaseUrl + '/transcribe';
 
 			while (transcript.chunksQueue.length > 0) {
+				inSttAttempt = true;
+				countedCall = false;
 				const chunk = transcript.chunksQueue.shift();
+				appMetrics.set('worker_queue_depth', getTotalQueueDepth());
 				transcript.chunksBucket.set(chunk.chunkId, chunk);
+				const queueWaitMs = chunk.receivedAtMs != null ? Date.now() - chunk.receivedAtMs : null;
 				const audioBuffer = Buffer.from(chunk.audio).toString('base64');
 				const sttStartMs = Date.now();
 
@@ -198,6 +216,9 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 					}),
 				});
 
+				appMetrics.increment('stt_calls_total');
+				countedCall = true;
+
 				if (response.status !== 200) {
 					chunk.retryCount++;
 					if (chunk.retryCount < MAX_RETRIES) {
@@ -205,6 +226,10 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 						transcript.chunksBucket.delete(chunk.chunkId);
 						break;
 					} else {
+						appMetrics.increment('stt_errors_total');
+						appMetrics.observe('stt_latency_ms', Date.now() - sttStartMs);
+						if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
+						appMetrics.increment('chunks_failed_total');
 						logger.error(COMPONENT, 'stt_response_failed', 'STT failed after retries', {
 							transcriptId,
 							chunkId: chunk.chunkId,
@@ -212,6 +237,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 							retryCount: chunk.retryCount,
 							errorClass: 'STTNon200',
 							message: response.statusText || 'STT request failed',
+							queueWaitMs,
 						});
 						transcript.chunksBucket.delete(chunk.chunkId);
 						transcript.failedChunks.push(chunk);
@@ -221,13 +247,16 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 
 				const responseJson = await response.json();
 				const latencyMs = Date.now() - sttStartMs;
+				appMetrics.observe('stt_latency_ms', latencyMs);
+				if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
 				const segments = responseJson.segments || [];
-				const metrics = responseJson.metrics || {};
+				const responseMetrics = responseJson.metrics || {};
 				logger.info(COMPONENT, 'stt_response_ok', 'STT succeeded', {
 					transcriptId,
 					chunkId: chunk.chunkId,
 					latencyMs,
-					realTimeFactor: metrics.realTimeFactor ?? null,
+					queueWaitMs,
+					realTimeFactor: responseMetrics.realTimeFactor ?? null,
 					segmentsCount: segments.length,
 				});
 
@@ -248,6 +277,10 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			}
 			transcript.inFlight = false;
 		} catch (error) {
+			if (inSttAttempt && !countedCall) {
+				appMetrics.increment('stt_calls_total');
+			}
+			appMetrics.increment('stt_errors_total');
 			logger.error(COMPONENT, 'stt_response_failed', 'STT request failed', {
 				transcriptId,
 				errorClass: error.constructor?.name || 'Error',

@@ -4,6 +4,7 @@ const { joinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
 const { interactionErrorHelper } = require('../utils/interaction-errors.js');
 const timeoutDuration = require('../config/timeouts.js');
 const logger = require('../services/logger/logger');
+const appMetrics = require('../services/metrics/metrics');
 
 const COMPONENT = 'bot-coordinator';
 const LATE_JOINER_DM =
@@ -322,6 +323,7 @@ function createBotCoordinator(sessionStore) {
             const disabledRow = new ActionRowBuilder().addComponents(disabledAccept, disabledReject);
             await sessionState.originalInteraction.editReply({ components: [disabledRow] });
 
+            appMetrics.increment('meetings_closed_total');
             logger.info(COMPONENT, 'session_closed', 'Meeting closed', {
                 sessionId,
                 autoClose,
@@ -449,6 +451,7 @@ function createBotCoordinator(sessionStore) {
 		}, timeoutDuration.uiTimeoutMs);
 		sessionState.timeouts.uiTimeoutId = uiTimeoutId;
 		sessionStore.createSession(sessionId, sessionState);
+		appMetrics.increment('meetings_started_total');
 		logger.info(COMPONENT, 'session_started', 'Meeting started', {
 			sessionId,
 			guildId: interaction.guild?.id ?? null,
