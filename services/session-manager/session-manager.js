@@ -152,6 +152,28 @@ function createSessionManager({
 		return sessionState.processingPromise;
 	}
 
+    function flushQueues(sessionId) {
+        const sessionState = sessionStates.get(sessionId);
+        if (!sessionState) {
+            console.error('no session state found.', sessionId);
+            return false;
+        }
+        for (const [participantId, participantState] of sessionState.participantStates) {
+            if (!participantState?.chunkerState) {
+                console.error('participant state not found.', participantId);
+                continue;
+            }
+            const participant = { participantId: participantId, participantState: participantState };
+            const samplesInBuffer = participantState.chunkerState.samplesInBuffer;
+            if (samplesInBuffer > 0) {
+                const chunk = cutChunk(sessionId, participant, samplesInBuffer);
+                sessionState.chunksQueue.push(chunk);
+                ensureProcessing(sessionId);
+            }
+        }
+        return true;
+    }
+
     async function pauseSession(sessionId) {
         const sessionState = sessionStates.get(sessionId);
         if (!sessionState) {
@@ -164,19 +186,7 @@ function createSessionManager({
             return false;
         }
         try {
-            for (const [participantId, participantState] of sessionState.participantStates) {
-                if (!participantState?.chunkerState) {
-                    console.error('participant state not found.', participantId);
-                    continue;
-                }
-                const participant = { participantId: participantId, participantState: participantState };
-                const samplesInBuffer = participantState.chunkerState.samplesInBuffer;
-                if (samplesInBuffer > 0) {
-                    const chunk = cutChunk(sessionId, participant, samplesInBuffer);
-                    sessionState.chunksQueue.push(chunk);
-                    ensureProcessing(sessionId);
-                }
-            }
+            flushQueues(sessionId);
             return true;
         } catch (error) {
             console.error('error pausing session.', error);
@@ -225,23 +235,26 @@ function createSessionManager({
 
 
 	async function closeSession(sessionId) {
-		const sessionState = sessionStates.get(sessionId);
-		if (!sessionState) {
-			throw new Error('session not found.');
-		}
-		const transcriptPath = sessionState.transcriptPath;
-		const reportGenerator = sessionState.reportGenerator;
-		const summaryGenerator = sessionState.summaryGenerator;
-		const displayNames = Array.from(sessionState.participantStates.values(), (ps) => ps.displayName);
+            const sessionState = sessionStates.get(sessionId);
+            if (!sessionState) {
+                throw new Error('session not found.');
+            }
+            const transcriptPath = sessionState.transcriptPath;
+            const reportGenerator = sessionState.reportGenerator;
+            const summaryGenerator = sessionState.summaryGenerator;
+            const displayNames = Array.from(sessionState.participantStates.values(), (ps) => ps.displayName);
 
 		try {
 			await ensureProcessing(sessionId);
+            flushQueues(sessionId);
+
+            stage = 'transcript';
 			await transcriptWorker.closeTranscript(sessionId, {
 				channelId: sessionState.voiceChannelId,
 				participantDisplayNames: displayNames,
 			});
 			const reportPath = await reportGenerator.generateReport(transcriptPath);
-			const summary = await summaryGenerator.generateSummary(reportPath);
+            const summary = await summaryGenerator.generateSummary(reportPath);
 			await reportGenerator.insertSummary(reportPath, summary);
 			appMetrics.observe('meeting_duration_ms', Date.now() - (sessionState.meetingStartTimeMs || Date.now()));
 			appMetrics.incrementGauge('meetings_active', -1);
