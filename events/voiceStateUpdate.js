@@ -45,7 +45,6 @@ module.exports = {
                 }
                 return;
             } catch (error) {
-                console.error('error pausing meeting.', error);
                 return;
             }
           }

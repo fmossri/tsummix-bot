@@ -4,7 +4,6 @@ const sessionStore = {
 
 	createSession(sessionId, sessionState) {
 		sessions.set(sessionId, sessionState);
-		console.log('debug message: session created!');
 	},
 	findSessionByChannelId(channelId) {
 		for (const [sessionId, sessionState] of sessions.entries()) {
@@ -24,11 +23,9 @@ const sessionStore = {
 	},
 	deleteSession(sessionId) {
 		if (!sessions.has(sessionId)) {
-			console.log('no session found by message id.', sessionId);
 			return;
 		}
 		sessions.delete(sessionId);
-		console.log('session deleted by message id.', sessionId);
 	},
 
 	channelHasSession(channelId) {

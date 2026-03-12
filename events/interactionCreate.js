@@ -8,7 +8,6 @@ module.exports = {
 			const command = interaction.client.commands.get(interaction.commandName);
 
 			if (!command) {
-				console.error(`No command matching ${interaction.commandName} was found.`);
 				return;
 			}
 
@@ -16,7 +15,6 @@ module.exports = {
 				await command.execute(interaction);
 			}
 			catch (error) {
-				console.error(error);
 				await interactionErrorHelper(interaction, 'There was an error while executing this command!');
 			}
 		}
@@ -25,7 +23,6 @@ module.exports = {
 				await interaction.client.botCoordinator.handleButtonInteraction(interaction);
 			}
 			catch (error) {
-				console.error(error);
 				await interactionErrorHelper(interaction, 'There was an error while handling this button.');
 			}
 		}

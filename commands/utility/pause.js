@@ -41,7 +41,6 @@ module.exports = {
                 });
             }
 		} catch (error) {
-			console.error('error pausing meeting.', error);
 			await interactionErrorHelper(interaction, 'An error occurred while pausing the meeting recording.');
 		}
 	},

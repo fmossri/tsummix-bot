@@ -133,7 +133,6 @@ async function generateSummary(reportPath, options = {}) {
         try {
             return await adapter.complete(system, user, options);
         } catch (error) {
-            console.error(`Error calling ${process.env.LLM_PROVIDER}:`, error);
             throw error;
         }
     };

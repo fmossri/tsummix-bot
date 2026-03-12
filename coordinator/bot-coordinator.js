@@ -14,25 +14,19 @@ function createBotCoordinator(sessionStore) {
     const confirmMsgToSession = new Map();
 
     async function connectToChannel(sessionId) {
-        const sessionState = sessionStore.getSessionById(sessionId);
-        if (!sessionState) {
-            console.error('session not found.', sessionId);
-            return false;
-        }
         try {
-            const voiceConnection = await joinVoiceChannel({
+            const sessionState = sessionStore.getSessionById(sessionId);
+            const voiceConnection = joinVoiceChannel({
                 channelId: sessionState.voiceChannelId,
                 guildId: sessionState.originalInteraction.guild.id,
                 adapterCreator: sessionState.originalInteraction.guild.voiceAdapterCreator,
                 selfDeaf: false
             });
             sessionState.voiceConnection = voiceConnection;
-            console.log('voice connection established.');
             return true;
         }
         catch (error) {
-            console.error('error connecting to channel.', error);
-            return false;
+            throw error;
         }
     }
 
@@ -58,45 +52,27 @@ function createBotCoordinator(sessionStore) {
 
     function unsubscribeFromStream(sessionId, participantId) {
         const sessionState = sessionStore.getSessionById(sessionId);
-        if (!sessionState) {
-            console.error('session not found.', sessionId);
-            return false;
-        }
         try {
-            const participant = sessionState.participantStates.get(participantId);
-            if (!participant) {
-                console.error('participant not found.', participantId);
-                return false;
-            }
-            if (participant.subscription) {
-                if (participant.pcmStream) {
-                    participant.pcmStream.removeAllListeners();
-                    participant.pcmStream = null;
+            const participantState = sessionState.participantStates.get(participantId);
+            if (participantState.subscription) {
+                if (participantState.pcmStream) {
+                    participantState.pcmStream.removeAllListeners();
+                    participantState.pcmStream = null;
                 }
-                participant.subscription.destroy();
-                participant.subscription = null;
+                participantState.subscription.destroy();
+                participantState.subscription = null;
 
             }
-            return true;
         } catch (error) {
-            console.error('error unsubscribing from stream.', error);
-            return false;
+            throw error;
         }
     }
 
     function subscribeToStream(sessionId, participantId) {
-        const sessionState = sessionStore.getSessionById(sessionId);
-        if (!sessionState) {
-            console.error('session not found.', sessionId);
-            return false;
-        }
         try {
-            const participant = sessionState.participantStates.get(participantId);
-            if (!participant) {
-                console.error('participant not found.', participantId);
-                return false;
-            }
-            if (participant.subscription) {
+            const sessionState = sessionStore.getSessionById(sessionId);
+            const participantState = sessionState.participantStates.get(participantId);
+            if (participantState.subscription) {
                 return true;
             }
             const options = {
@@ -105,10 +81,6 @@ function createBotCoordinator(sessionStore) {
                     duration: 100
                 }
             };
-            if (!sessionState.voiceConnection) {
-                console.error('voice connection not found.');
-                return false;
-            }
             const receiver = sessionState.voiceConnection.receiver;
             const decoder = new prism.opus.Decoder(
                 {
@@ -117,27 +89,30 @@ function createBotCoordinator(sessionStore) {
                     frameSize: 320
                 }
             );
-            participant.subscription = receiver.subscribe(participantId, options);
-            participant.subscription.on('error', (error) => {
-                console.error('error subscribing to stream.', error);
+            participantState.subscription = receiver.subscribe(participantId, options);
+            participantState.subscription.on('error', (error) => {
+                logger.error(COMPONENT, 'subscription_failed', 'Subscription error', {
+                    sessionId,
+                    participantId,
+                    errorClass: 'SubscribeFailed',
+                    innerErrorClass: error.constructor?.name || 'Error',
+                    message: error.message,
+                });
                 unsubscribeFromStream(sessionId, participantId);
             });
-            participant.subscription.on('end', () => {
-                console.log('stream ended.');
+            participantState.subscription.on('end', () => {
                 unsubscribeFromStream(sessionId, participantId);
             });
-            participant.pcmStream = participant.subscription.pipe(decoder);
-            return true;
+            participantState.pcmStream = participantState.subscription.pipe(decoder);
         } catch (error) {
-            console.error('error subscribing to stream.', error);
-            return false;
+            throw error;
         }
     }
 
     async function registerParticipant(sessionId, participantId, interaction) {
         const sessionState = sessionStore.getSessionById(sessionId);
         if (!sessionState) {
-            logger.error(COMPONENT, 'participant_accept_failed', 'Session not found for participant registration', {
+            logger.error(COMPONENT, 'participant_accept_failed', 'Session not found', {
                 sessionId,
                 participantId,
                 errorClass: 'SessionNotFound',
@@ -227,12 +202,19 @@ function createBotCoordinator(sessionStore) {
     function reconnectParticipant(sessionId, participantId) {
         const sessionState = sessionStore.getSessionById(sessionId);
         if (!sessionState) {
-            console.error('session not found.', sessionId);
+            logger.error(COMPONENT, 'participant_reconnect_failed', 'Session not found', {
+                sessionId,
+                errorClass: 'SessionNotFound',
+            });
             return false;
         }
-        const participant = sessionState.participantStates.get(participantId);
-        if (!participant) {
-            console.error('participant not found.', participantId);
+        const participantState = sessionState.participantStates.get(participantId);
+        if (!participantState) {
+            logger.error(COMPONENT, 'participant_reconnect_failed', 'Participant not found', {
+                sessionId,
+                participantId,
+                errorClass: 'ParticipantNotFound',
+            });
             return false;
         }
         if (sessionState.paused) {
@@ -244,7 +226,7 @@ function createBotCoordinator(sessionStore) {
             return;
         }
         try {
-            if (participant.subscription) {
+            if (participantState.subscription) {
                 unsubscribeFromStream(sessionId, participantId);
             }
             subscribeToStream(sessionId, participantId);
@@ -256,18 +238,20 @@ function createBotCoordinator(sessionStore) {
             return true;
         }
         catch (error) {
-            console.error('error reconnecting participant.', error);
+            logger.error(COMPONENT, 'participant_reconnect_failed', 'Re-subscribe or chunkStream failed for participant', {
+                sessionId,
+                participantId,
+                errorClass: 'ReconnectFailed',
+                innerErrorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
             return false;
         }
     }
 
     function stopVoiceCapture(sessionId) {
-        const sessionState = sessionStore.getSessionById(sessionId);
-        if (!sessionState) {
-            console.error('session not found.', sessionId);
-            return false;
-        }
         try {
+            const sessionState = sessionStore.getSessionById(sessionId);
             for (const participantId of sessionState.participantIds) {
                 unsubscribeFromStream(sessionId, participantId);
             }
@@ -278,16 +262,13 @@ function createBotCoordinator(sessionStore) {
             return true;
         }
         catch (error) {
-            console.error('error stopping voice capture.', error);
-            return false;
+            throw error;
         }
     }
+
     async function executeClose(sessionId, autoClose = false) {
         const sessionState = sessionStore.getSessionById(sessionId);
-        if (!sessionState) {
-            console.error('session not found.', sessionId);
-            return false;
-        }
+        
         const client = sessionState.originalInteraction.client;
         if (sessionState.timeouts.uiTimeoutId) {
             clearTimeout(sessionState.timeouts.uiTimeoutId);
@@ -297,12 +278,14 @@ function createBotCoordinator(sessionStore) {
             clearTimeout(sessionState.timeouts.pauseTimeoutId);
             sessionState.timeouts.pauseTimeoutId = null;
         }
-        if (!stopVoiceCapture(sessionId)) {
-            console.error('error stopping voice capture.');
-            return false;
-        }
         try {
-            const { _, summary } = await client.sessionManager.closeSession(sessionId);
+            stopVoiceCapture(sessionId);
+
+            const closeResult = await client.sessionManager.closeSession(sessionId);
+            if (!closeResult) {
+                return false;
+            }
+            const { summary } = closeResult;
             const closeMessage = autoClose ? 
             'Meeting closed due to inactivity. The partial report is saved.' : 
             `The meeting is over. Thank you for participating. \n\n**Summary:**\n${summary}`;
@@ -381,8 +364,6 @@ function createBotCoordinator(sessionStore) {
                             content: 'Disclaimer rejected. You are not a participant in the meeting and will not be recorded.',
                             flags: MessageFlags.Ephemeral,
                         });
-
-                        console.log('disclaimer rejected by user.', userId);
                         break;
                     }
                     else {await interaction.deferUpdate(); break;}
@@ -395,13 +376,11 @@ function createBotCoordinator(sessionStore) {
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
                     if (!(await executeClose(sessionId))) {
-                        console.error('error executing close.');
                         await interactionErrorHelper(interaction, 'An error occurred while closing the meeting.');
                         break;
                     }
                     confirmMsgToSession.delete(interaction.message.id);
                     await interaction.deleteReply();
-                    console.log('session deleted.');
                     break;
 
                 default:
@@ -409,62 +388,81 @@ function createBotCoordinator(sessionStore) {
                     break;
             }
         } catch (error) {
-            console.error('An error occurred while handling the button interaction.', error);
             await interactionErrorHelper(interaction, 'An error occurred while handling the button interaction.');
         }
     }
 
     async function startMeeting(interaction) {
-        const voiceChannel = interaction.member.voice.channel;
+        try {
+            const voiceChannel = interaction.member.voice.channel;
 
-		const interactionResponse = await sendMeetingStartMessage(interaction);
+            const interactionResponse = await sendMeetingStartMessage(interaction);
 
-		const replyMessageObject = await interactionResponse.fetch();
-		const sessionId = replyMessageObject.id;
+            const replyMessageObject = await interactionResponse.fetch();
+            const sessionId = replyMessageObject.id;
 
-        const sessionState = {
-            started: false,
-            paused: false,
-			participantIds: [],
-            rejectedIds: [],
-            dmIds: [],
-            participantStates: new Map(),
-			voiceChannelId: voiceChannel.id,
-			originalInteraction: interaction,
-			timeouts:{uiTimeoutId: null, pauseTimeoutId: null},
-		};
-		const uiTimeoutId = setTimeout(async () => {
-			const session = sessionStore.getSessionById(sessionId);
-			if (session) {
-                try {
-                    session.timeouts.uiTimeoutId = null;
-                    await session.originalInteraction.followUp({
-                        content: 'Session timed out after 1 minute. All participants must accept to start the meeting.',
-                    });
+            const sessionState = {
+                started: false,
+                paused: false,
+                participantIds: [],
+                rejectedIds: [],
+                dmIds: [],
+                participantStates: new Map(),
+                voiceChannelId: voiceChannel.id,
+                originalInteraction: interaction,
+                timeouts:{uiTimeoutId: null, pauseTimeoutId: null},
+            };
+            const uiTimeoutId = setTimeout(async () => {
+                const session = sessionStore.getSessionById(sessionId);
+                if (session) {
+                    try {
+                        session.timeouts.uiTimeoutId = null;
+                        await session.originalInteraction.followUp({
+                            content: 'Session timed out after 1 minute. All participants must accept to start the meeting.',
+                        });
+                    }
+                    catch (error) {
+                        logger.error(COMPONENT, 'session_close_failed', 'Error following up on session timeout', {
+                            errorClass: error.constructor?.name || 'Error',
+                            message: error.message,
+                        });
+                        return false;
+                    }
                 }
-                catch (error) {
-                    console.error('error following up on session timeout.', error);
-                }
-			}
-			sessionStore.deleteSession(sessionId);
-			console.log('session timed out and deleted.');
-		}, timeoutDuration.uiTimeoutMs);
-		sessionState.timeouts.uiTimeoutId = uiTimeoutId;
-		sessionStore.createSession(sessionId, sessionState);
-		appMetrics.increment('meetings_started_total');
-		logger.info(COMPONENT, 'session_started', 'Meeting started', {
-			sessionId,
-			guildId: interaction.guild?.id ?? null,
-			channelId: voiceChannel?.id ?? null,
-			initiator: interaction.user?.id ?? null,
-		});
-        return true;
+                sessionStore.deleteSession(sessionId);
+                logger.info(COMPONENT, 'session_closed', 'Session timed out and deleted', {
+                    sessionId,
+                });
+            }, timeoutDuration.uiTimeoutMs);
+
+            sessionState.timeouts.uiTimeoutId = uiTimeoutId;
+            sessionStore.createSession(sessionId, sessionState);
+            appMetrics.increment('meetings_started_total');
+            logger.info(COMPONENT, 'session_started', 'Meeting started', {
+                sessionId,
+                guildId: interaction.guild?.id ?? null,
+                channelId: voiceChannel?.id ?? null,
+                initiator: interaction.user?.id ?? null,
+            });
+            return true;
+        } catch (error) {
+            logger.error(COMPONENT, 'session_start_failed', 'Error starting meeting', {
+                sessionId,
+                errorClass: 'SessionStartFailed',
+                innerErrorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
+            throw error;
+        }
     }
 
     async function pauseMeeting(sessionId) {
         const sessionState = sessionStore.getSessionById(sessionId);
         if (!sessionState) {
-            console.error('session not found.', sessionId);
+            logger.error(COMPONENT, 'session_pause_failed', 'Session not found', {
+                sessionId,
+                errorClass: 'SessionNotFound',
+            });
             return false;
         }
         try {
@@ -477,12 +475,16 @@ function createBotCoordinator(sessionStore) {
                 reason: 'explicit',
             });
             const pauseTimeoutId = setTimeout(async () => {
-                console.log('pause timeout expired.');
                 await executeClose(sessionId, true);
             }, timeoutDuration.explicitPauseMs);
             sessionState.timeouts.pauseTimeoutId = pauseTimeoutId;
         } catch (error) {
-            console.error('error pausing meeting.', error);
+            logger.error(COMPONENT, 'session_pause_failed', 'Error pausing meeting', {
+                sessionId,
+                errorClass: 'PauseSessionFailed',
+                innerErrorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
             throw error;
         }
     }
@@ -490,13 +492,19 @@ function createBotCoordinator(sessionStore) {
     async function resumeMeeting(sessionId) {
         const sessionState = sessionStore.getSessionById(sessionId);
         if (!sessionState) {
-            console.error('session not found.', sessionId);
+            logger.error(COMPONENT, 'session_resume_failed', 'Session not found', {
+                sessionId,
+                errorClass: 'SessionNotFound',
+            });
             return false;
         }
         try {
             if (!sessionState.voiceConnection) {
                 if (!(await connectToChannel(sessionId))) {
-                    console.error('error connecting to channel.');
+                    logger.error(COMPONENT, 'session_resume_failed', 'Failed to connect to channel', {
+                        sessionId,
+                        errorClass: 'ConnectFailed',
+                    });
                     return false;
                 }
             }
@@ -506,15 +514,29 @@ function createBotCoordinator(sessionStore) {
             }
             const voiceChannel = await sessionState.originalInteraction.guild.channels.fetch(sessionState.voiceChannelId);
             if (!voiceChannel) {
-                console.error('voice channel not found.', sessionState.voiceChannelId);
+                logger.error(COMPONENT, 'session_resume_failed', 'Voice channel not found', {
+                    sessionId,
+                    voiceChannelId: sessionState.voiceChannelId,
+                    errorClass: 'VoiceChannelNotFound',
+                });
                 return false;
             }
+            sessionState.paused = false;
+            let anyReconnectFailed = false;
             for (const member of voiceChannel.members) {
                 if (sessionState.participantIds.includes(member.user.id)) {
-                    reconnectParticipant(sessionId, member.user.id);
+                    if (!reconnectParticipant(sessionId, member.user.id)) {
+                        anyReconnectFailed = true;
+                    }
                 }
             }
-            sessionState.paused = false;
+            if (anyReconnectFailed) {
+                logger.error(COMPONENT, 'session_resume_failed', 'One or more participants failed to reconnect', {
+                    sessionId,
+                    errorClass: 'ResumeSessionFailed',
+                });
+                return false;
+            }
             logger.info(COMPONENT, 'session_resumed', 'Recording resumed', { sessionId });
             await sessionState.originalInteraction.followUp({
                 content: 'Meeting recording resumed.',
@@ -522,8 +544,13 @@ function createBotCoordinator(sessionStore) {
             return true;
         }
         catch (error) {
-            console.error('error resuming meeting.', error);
-            throw error;
+            logger.error(COMPONENT, 'session_resume_failed', 'Error resuming meeting', {
+                sessionId,
+                errorClass: 'ResumeSessionFailed',
+                innerErrorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
+            return false;
         }
     }
 
@@ -558,7 +585,12 @@ function createBotCoordinator(sessionStore) {
                         participantId: userId,
                     });
                 } catch (err) {
-                    console.error('Could not DM late joiner:', err.message);
+                    logger.error(COMPONENT, 'participant_accept_failed', 'Could not DM late joiner', {
+                        sessionId,
+                        participantId: userId,
+                        errorClass: 'DmFailed',
+                        message: err.message,
+                    });
                 }
             }
             sessionState.dmIds.push(userId);
@@ -568,7 +600,10 @@ function createBotCoordinator(sessionStore) {
     async function closeMeeting(sessionId, interaction) {
         const sessionState = sessionStore.getSessionById(sessionId);
         if (!sessionState) {
-            console.error('session not found.', sessionId);
+            logger.error(COMPONENT, 'session_close_failed', 'Session not found', {
+                sessionId,
+                errorClass: 'SessionNotFound',
+            });
             return false;
         }
         const confirmButton = new ButtonBuilder()
@@ -587,31 +622,39 @@ function createBotCoordinator(sessionStore) {
             try {
                 await confirmMessage.delete();
             } catch (err) {
-                console.error('Failed to delete confirm message:', err);
+                logger.error(COMPONENT, 'session_close_failed', 'Failed to delete confirm message', {
+                    sessionId,
+                    messageId: confirmMessage.id,
+                    errorClass: err.constructor?.name || 'Error',
+                    message: err.message,
+                });
             }
             confirmMsgToSession.delete(confirmMessage.id);
-            console.log('End meeting confirm message timed out and deleted.');
         }, timeoutDuration.uiTimeoutMs);
         sessionState.timeouts.uiTimeoutId = uiTimeoutId;
-
-        console.log('End meeting confirm message sent.');
         return true;
     }
 
     async function autoCloseMeeting(sessionId) {
         const sessionState = sessionStore.getSessionById(sessionId);
         if (!sessionState) {
-            console.error('session not found.', sessionId);
+            logger.error(COMPONENT, 'session_close_failed', 'Session not found', {
+                sessionId,
+                errorClass: 'SessionNotFound',
+            });
             return false;
         }
         try {
             if (!(await executeClose(sessionId, true))) {
-                console.error('error executing close.');
                 return false;
             }
             return true;
         } catch (error) {
-            console.error('error auto closing meeting.', error);
+            logger.error(COMPONENT, 'session_close_failed', 'Auto close meeting failed', {
+                sessionId,
+                errorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
             return false;
         }
     }

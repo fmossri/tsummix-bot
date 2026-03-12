@@ -45,7 +45,6 @@ module.exports = {
                 });
             }
         } catch (error) {
-            console.error('error resuming meeting.', error);
             await interactionErrorHelper(interaction, 'An error occurred while resuming the meeting.');
         }
     },

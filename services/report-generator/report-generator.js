@@ -126,7 +126,6 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
         fsImpl.writeFileSync(reportPath, report.join('\n'), 'utf8');
         return reportPath;
         } catch (error) {
-            console.error('Error generating report:', error);
             throw error;
         }
     }

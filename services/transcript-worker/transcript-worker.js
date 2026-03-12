@@ -77,7 +77,8 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		} catch (error) {
 			logger.error(COMPONENT, 'transcript_start_failed', 'Failed to start transcript', {
 				transcriptId,
-				errorClass: error.constructor?.name || 'Error',
+				errorClass: 'TranscriptStartFailed',
+				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
 			throw error;
@@ -86,7 +87,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 
 	function ensureProcessing(transcriptId) {
 		if (!transcriptsMap.has(transcriptId)) {
-			throw new Error('Transcript not found');
+			throw new Error('Invariant: transcript not found in ensureProcessing');
 		}
 		const transcript = transcriptsMap.get(transcriptId);
 		if (!transcript.transcriptState.processingPromise) {
@@ -99,11 +100,12 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 	}
 
 	async function enqueueChunk(transcriptId, chunk) {
-		if (!transcriptsMap.has(transcriptId)) {
-			throw new Error('Transcript not found');
-		}
-		const transcript = transcriptsMap.get(transcriptId);
-		try {
+        try {
+            if (!transcriptsMap.has(transcriptId)) {
+                throw new Error('Invariant: transcript not found in enqueueChunk');
+            }
+
+            const transcript = transcriptsMap.get(transcriptId);
 			if (typeof chunk.chunkId !== 'number') {
 				throw new Error('Chunk ID must be a number');
 			}
@@ -136,7 +138,8 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			logger.error(COMPONENT, 'chunk_enqueue_failed', 'Chunk validation or enqueue failed', {
 				transcriptId,
 				chunkId: chunk?.chunkId,
-				errorClass: error.constructor?.name || 'Error',
+				errorClass: 'InvalidChunk',
+				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
 			throw error;
@@ -145,7 +148,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 
 	async function appendToTemp(transcriptId) {
 		if (!transcriptsMap.has(transcriptId)) {
-			throw new Error('Transcript not found');
+			throw new Error('Invariant: transcript not found in appendToTemp');
 		}
 		const transcript = transcriptsMap.get(transcriptId);
 		try {
@@ -171,11 +174,23 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			appMetrics.increment('transcript_flush_failures_total');
 			logger.error(COMPONENT, 'flush_failed', 'Failed to write transcript segments to file', {
 				transcriptId,
-				errorClass: error.constructor?.name || 'Error',
+				errorClass: 'TranscriptFlushFailed',
+				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
 			throw error;
 		}
+	}
+
+	function recordChunkFailure(transcriptId, transcript, chunk, logContext) {
+		transcript.chunksBucket.delete(chunk.chunkId);
+		appMetrics.increment('chunks_failed_total');
+		logger.error(COMPONENT, 'stt_response_failed', 'STT failed after retries', {
+			transcriptId,
+			chunkId: chunk.chunkId,
+			...logContext,
+		});
+		transcript.failedChunks.push(chunk);
 	}
 
 	async function processNextChunk(transcriptId) {
@@ -183,7 +198,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		let countedCall = false;
 		try {
 			if (!transcriptsMap.has(transcriptId)) {
-				throw new Error('Transcript not found');
+				throw new Error('Invariant: transcript not found in processNextChunk');
 			}
 			const transcript = transcriptsMap.get(transcriptId);
 			if (transcript.chunksQueue.length === 0) {
@@ -229,18 +244,13 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 						appMetrics.increment('stt_errors_total');
 						appMetrics.observe('stt_latency_ms', Date.now() - sttStartMs);
 						if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
-						appMetrics.increment('chunks_failed_total');
-						logger.error(COMPONENT, 'stt_response_failed', 'STT failed after retries', {
-							transcriptId,
-							chunkId: chunk.chunkId,
+						recordChunkFailure(transcriptId, transcript, chunk, {
 							statusCode: response.status,
 							retryCount: chunk.retryCount,
 							errorClass: 'STTNon200',
 							message: response.statusText || 'STT request failed',
 							queueWaitMs,
 						});
-						transcript.chunksBucket.delete(chunk.chunkId);
-						transcript.failedChunks.push(chunk);
 						continue;
 					}
 				}
@@ -281,21 +291,35 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				appMetrics.increment('stt_calls_total');
 			}
 			appMetrics.increment('stt_errors_total');
-			logger.error(COMPONENT, 'stt_response_failed', 'STT request failed', {
-				transcriptId,
+			const transcript = transcriptsMap.get(transcriptId);
+			const currentChunk = transcript?.chunksBucket?.size > 0 ? Array.from(transcript.chunksBucket.values())[0] : null;
+			if (!transcript || !currentChunk) {
+				throw error;
+			}
+			transcript.chunksBucket.delete(currentChunk.chunkId);
+			currentChunk.retryCount = (currentChunk.retryCount || 0) + 1;
+			if (currentChunk.retryCount < MAX_RETRIES) {
+				transcript.chunksQueue.unshift(currentChunk);
+				transcript.inFlight = false;
+				return;
+			}
+			recordChunkFailure(transcriptId, transcript, currentChunk, {
+				retryCount: currentChunk.retryCount,
 				errorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
-			throw error;
+			transcript.inFlight = false;
+			return;
 		}
 	}
 
 	async function closeTranscript(transcriptId, { channelId, participantDisplayNames } = {}) {
-		if (!transcriptsMap.has(transcriptId)) {
-			throw new Error('Transcript not found');
-		}
-		const transcript = transcriptsMap.get(transcriptId);
-		try {
+        try {
+            if (!transcriptsMap.has(transcriptId)) {
+                throw new Error('Transcript not found');
+            }
+            const transcript = transcriptsMap.get(transcriptId);
+
 			// Drain queue: process all remaining chunks and flush to tmp before building final transcript
 			while (transcript.chunksQueue.length > 0 || transcript.transcriptState.processingPromise) {
 				if (transcript.transcriptState.processingPromise) {
@@ -327,7 +351,11 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				}
 				if (transcript.failedChunks.length > 0) {
 					const failedChunkStartTimes = transcript.failedChunks.map((chunk, i) => `chunk ${i}: ${chunk.chunkStartTimeMs}ms`).join(', ');
-					console.error(`${transcript.failedChunks.length} chunks failed to transcribe: ${failedChunkStartTimes}`);
+					logger.warn(COMPONENT, 'transcript_closed', 'Transcript closed with failed chunks; some segments missing', {
+						transcriptId,
+						failedChunkCount: transcript.failedChunks.length,
+						failedChunkStartTimes,
+					});
 				}
 			}
 			const transcriptPath = transcript.transcriptState.filePath;
@@ -355,10 +383,11 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		} catch (error) {
 			logger.error(COMPONENT, 'transcript_close_failed', 'Failed to close transcript', {
 				transcriptId,
-				errorClass: error.constructor?.name || 'Error',
+				errorClass: 'TranscriptCloseFailed',
+				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
-			throw new Error(error.message);
+			throw error;
 		}
 	}
 

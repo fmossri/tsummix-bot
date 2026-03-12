@@ -13,10 +13,6 @@ function createSessionManager({
     const sessionStates = new Map();
 
     function cutChunk(sessionId, { participantId, participantState }, targetSamples) {
-        if (!participantState) {
-            console.error('participant state not found.', participantId);
-            return false;
-        }
         const participantData = {
             participantId: participantId,
             displayName: participantState.displayName,
@@ -53,7 +49,13 @@ function createSessionManager({
             return chunk;
         }
         catch (error) {
-            console.error('error cutting chunk.', error);
+            logger.error(COMPONENT, 'chunk_send_failed', 'Error cutting chunk', {
+                sessionId,
+                transcriptId: sessionId,
+                participantId,
+                errorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
             throw error;
         }
     }
@@ -61,21 +63,66 @@ function createSessionManager({
 	function getNextChunkId(sessionId) {
 		const sessionState = sessionStates.get(sessionId);
 		if (!sessionState) {
-			console.error('session not found.', sessionId);
-			return false;
+            throw new Error('Invariant: sessionState missing in getNextChunkId');
 		}
 		return sessionState.nextChunkId++;
+	}
+
+    async function sendChunks(sessionId) {
+		const sessionState = sessionStates.get(sessionId);
+		if (!sessionState) {
+            throw new Error('Invariant: sessionState missing in sendChunks');
+		}
+		while (sessionState.chunksQueue.length > 0) {
+			const chunk = sessionState.chunksQueue.shift();
+			try {
+				await transcriptWorker.enqueueChunk(sessionId, chunk);
+			} catch (error) {
+				logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed', {
+					sessionId,
+					transcriptId: sessionId,
+					chunkId: chunk?.chunkId,
+					errorClass: error.constructor?.name || 'Error',
+					message: error.message,
+				});
+				continue;
+			}
+		}
+		return true;
+	}
+
+    function ensureProcessing(sessionId) {
+		const sessionState = sessionStates.get(sessionId);
+		if (!sessionState) {
+			throw new Error('Invariant: sessionState missing in ensureProcessing');
+		}
+		if (sessionState.chunksQueue.length > 0 && !sessionState.processingPromise) {
+			sessionState.processingPromise = sendChunks(sessionId)
+				.finally(() => {
+					sessionState.processingPromise = null;
+				});
+		}
+		return sessionState.processingPromise;
 	}
 
 	function chunkStream(sessionId, participantId) {
 		const sessionState = sessionStates.get(sessionId);
 		if (!sessionState) {
-			console.error('session not found.', sessionId);
+			logger.error(COMPONENT, 'chunk_send_failed', 'Session not found', {
+				sessionId,
+				participantId,
+				errorClass: 'SessionNotFound',
+			});
 			return false;
 		}
 		const participantState = sessionState.participantStates.get(participantId);
 		if (!participantState) {
-			console.error('participant state not found.', participantId);
+			logger.error(COMPONENT, 'chunk_send_failed', 'Participant not found', {
+				sessionId,
+				transcriptId: sessionId,
+				participantId,
+				errorClass: 'ParticipantNotFound',
+			});
 			return false;
 		}
 		const TARGET_SAMPLES = 30 * 16000;
@@ -101,66 +148,37 @@ function createSessionManager({
                         ensureProcessing(sessionId);
                     }
                     catch (error) {
-                        console.error('error cutting chunk.', error);
+                        logger.error(COMPONENT, 'chunk_send_failed', 'Error cutting chunk', {
+                            sessionId,
+                            transcriptId: sessionId,
+                            participantId,
+                            errorClass: error.constructor?.name || 'Error',
+                            message: error.message,
+                        });
                         return false;
                     }
 				}
                 return true;
 			});
 		} catch (error) {
-			console.error('error chunking stream.', error);
+			logger.error(COMPONENT, 'chunk_send_failed', 'Error chunking stream', {
+				sessionId,
+				transcriptId: sessionId,
+				participantId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			return false;
 		}
-	}
-
-	async function sendChunks(sessionId) {
-		const sessionState = sessionStates.get(sessionId);
-		if (!sessionState) {
-			console.error('no session state found.', sessionId);
-			return false;
-		}
-		while (sessionState.chunksQueue.length > 0) {
-			const chunk = sessionState.chunksQueue.shift();
-			try {
-				await transcriptWorker.enqueueChunk(sessionId, chunk);
-			} catch (error) {
-				logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed', {
-					sessionId,
-					transcriptId: sessionId,
-					chunkId: chunk?.chunkId,
-					errorClass: error.constructor?.name || 'Error',
-					message: error.message,
-				});
-				continue;
-			}
-		}
-		return true;
-	}
-
-	function ensureProcessing(sessionId) {
-		const sessionState = sessionStates.get(sessionId);
-		if (!sessionState) {
-			console.error('no session state found.', sessionId);
-			return false;
-		}
-		if (sessionState.chunksQueue.length > 0 && !sessionState.processingPromise) {
-			sessionState.processingPromise = sendChunks(sessionId)
-				.finally(() => {
-					sessionState.processingPromise = null;
-				});
-		}
-		return sessionState.processingPromise;
 	}
 
     function flushQueues(sessionId) {
         const sessionState = sessionStates.get(sessionId);
         if (!sessionState) {
-            console.error('no session state found.', sessionId);
-            return false;
+            throw new Error('Invariant: sessionState missing in flushQueues');
         }
         for (const [participantId, participantState] of sessionState.participantStates) {
             if (!participantState?.chunkerState) {
-                console.error('participant state not found.', participantId);
                 continue;
             }
             const participant = { participantId: participantId, participantState: participantState };
@@ -177,30 +195,41 @@ function createSessionManager({
     async function pauseSession(sessionId) {
         const sessionState = sessionStates.get(sessionId);
         if (!sessionState) {
-            console.error('no session state found.', sessionId);
+            logger.error(COMPONENT, 'session_pause_failed', 'Session not found', {
+                sessionId,
+                errorClass: 'SessionNotFound',
+            });
             return false;
         }
         const storeSession = sessionStore.getSessionById(sessionId);
         if (!storeSession?.paused) {
-            console.error('session not paused.', sessionId);
             return false;
         }
         try {
             flushQueues(sessionId);
             return true;
         } catch (error) {
-            console.error('error pausing session.', error);
+            logger.error(COMPONENT, 'session_pause_failed', 'Error pausing session', {
+                sessionId,
+                errorClass: 'PauseSessionFailed',
+                innerErrorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
             throw error;
         }
     }
 
 	async function startSession(sessionId) {
-		const session = sessionStore.getSessionById(sessionId);
-		if (!session) {
-			console.error('session not found.', sessionId);
-			return false;
-		}
-		try {
+        try {
+            const session = sessionStore.getSessionById(sessionId);
+            if (!session) {
+                logger.error(COMPONENT, 'session_start_failed', 'Session not found', {
+                    sessionId,
+                    errorClass: 'SessionNotFound',
+                });
+                return false;
+            }
+
 			const meetingStartTimeMs = Date.now();
 			const sessionState = {
 				nextChunkId: 0,
@@ -225,26 +254,32 @@ function createSessionManager({
 			appMetrics.increment('session_start_failures_total');
 			logger.error(COMPONENT, 'session_start_failed', 'Failed to start session', {
 				sessionId,
-				errorClass: error.constructor?.name || 'Error',
+				errorClass: 'StartSessionFailed',
+				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
 			return false;
 		}
 	}
 
-
-
 	async function closeSession(sessionId) {
+        let stage = 'transcript';
+
+        try {
             const sessionState = sessionStates.get(sessionId);
             if (!sessionState) {
-                throw new Error('session not found.');
+                logger.error(COMPONENT, 'session_close_failed', 'Session not found', {
+                    sessionId,
+                    errorClass: 'SessionNotFound',
+                });
+                return false;
             }
             const transcriptPath = sessionState.transcriptPath;
             const reportGenerator = sessionState.reportGenerator;
             const summaryGenerator = sessionState.summaryGenerator;
             const displayNames = Array.from(sessionState.participantStates.values(), (ps) => ps.displayName);
 
-		try {
+            stage = 'drain';
 			await ensureProcessing(sessionId);
             flushQueues(sessionId);
 
@@ -253,9 +288,14 @@ function createSessionManager({
 				channelId: sessionState.voiceChannelId,
 				participantDisplayNames: displayNames,
 			});
+			stage = 'report';
 			const reportPath = await reportGenerator.generateReport(transcriptPath);
+			
+            stage = 'summary';
             const summary = await summaryGenerator.generateSummary(reportPath);
 			await reportGenerator.insertSummary(reportPath, summary);
+            
+            stage = 'finalize';
 			appMetrics.observe('meeting_duration_ms', Date.now() - (sessionState.meetingStartTimeMs || Date.now()));
 			appMetrics.incrementGauge('meetings_active', -1);
 			sessionStates.delete(sessionId);
@@ -269,10 +309,12 @@ function createSessionManager({
 			appMetrics.increment('session_close_failures_total');
 			logger.error(COMPONENT, 'session_close_failed', 'Close session failed', {
 				sessionId,
-				errorClass: error.constructor?.name || 'Error',
+				errorClass: 'CloseSessionFailed',
+				innerErrorClass: error.constructor?.name || 'Error',
+                stage,
 				message: error.message,
 			});
-			throw new Error(error.message);
+			throw error;
 		}
 	}
 
