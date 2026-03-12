@@ -1,11 +1,12 @@
-const LEVELS = ['debug', 'info', 'warn', 'error'];
+const LEVELS = ['debug', 'info', 'warn', 'error', 'silent'];
 
-// Minimum level to log, defaults to 'info' if unset or invalid.
+// Minimum level to log, defaults to 'info' if unset or invalid. 'silent' = no output.
 const ENV_LEVEL = process.env.LOG_LEVEL;
 const MIN_LEVEL = LEVELS.includes(ENV_LEVEL) ? ENV_LEVEL : 'info';
 const MIN_INDEX = LEVELS.indexOf(MIN_LEVEL);
 
 function shouldLog(level) {
+  if (MIN_LEVEL === 'silent') return false;
   const idx = LEVELS.indexOf(level);
   return idx !== -1 && idx >= MIN_INDEX;
 }
