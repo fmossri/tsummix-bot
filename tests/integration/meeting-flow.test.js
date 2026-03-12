@@ -138,9 +138,11 @@ function createConfirmInteraction(client, confirmMessageId = 'confirm-msg-1') {
 		deferReply: jest.fn().mockResolvedValue(undefined),
 		editReply: jest.fn().mockResolvedValue(undefined),
 		deleteReply: jest.fn().mockResolvedValue(undefined),
+		reply: jest.fn().mockResolvedValue(undefined),
 		followUp: jest.fn().mockResolvedValue(undefined),
 		client,
 		customId: 'close-meeting-confirm',
+		replied: false,
 		deferred: false,
 	};
 	confirmInt.deferReply = jest.fn().mockImplementation(async () => {
@@ -151,7 +153,8 @@ function createConfirmInteraction(client, confirmMessageId = 'confirm-msg-1') {
 
 beforeEach(() => {
 	jest.clearAllMocks();
-	mockJoinVoiceChannel.mockResolvedValue(mockConnection);
+	// joinVoiceChannel is sync in @discordjs/voice; return connection object so voiceConnection.destroy() etc. work.
+	mockJoinVoiceChannel.mockReturnValue(mockConnection);
 	mockReceiverSubscribe.mockReturnValue({
 		on: jest.fn(),
 		pipe: jest.fn().mockReturnValue({ on: jest.fn(), removeAllListeners: jest.fn(), destroy: jest.fn() }),

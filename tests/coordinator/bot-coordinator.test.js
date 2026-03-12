@@ -262,8 +262,10 @@ describe('Bot Coordinator', () => {
 			expect(sessionState.originalInteraction.client.sessionManager.chunkStream).toHaveBeenCalledWith('session-1', 'user-1');
 		});
 
-		it('returns false when connectToChannel fails (no voiceConnection, joinVoiceChannel rejects)', async () => {
-			mockJoinVoiceChannel.mockRejectedValueOnce(new Error('connect failed'));
+		it('returns false when connectToChannel fails (no voiceConnection, joinVoiceChannel throws)', async () => {
+			mockJoinVoiceChannel.mockImplementationOnce(() => {
+				throw new Error('connect failed');
+			});
 			const sessionState = {
 				participantIds: [],
 				voiceChannelId: 'voice-123',
@@ -279,7 +281,6 @@ describe('Bot Coordinator', () => {
 			const coordinator = createBotCoordinator(sessionStore);
 
 			const result = await coordinator.resumeMeeting('session-1');
-
 			expect(result).toBe(false);
 		});
 
@@ -303,7 +304,7 @@ describe('Bot Coordinator', () => {
 			expect(result).toBe(false);
 		});
 
-		it('throws when followUp rejects', async () => {
+		it('returns false when followUp rejects', async () => {
 			const voiceChannel = { members: [] };
 			const sessionState = {
 				participantIds: [],
@@ -320,7 +321,8 @@ describe('Bot Coordinator', () => {
 			const sessionStore = createMockSessionStore(sessionState);
 			const coordinator = createBotCoordinator(sessionStore);
 
-			await expect(coordinator.resumeMeeting('session-1')).rejects.toThrow();
+			const result = await coordinator.resumeMeeting('session-1');
+			expect(result).toBe(false);
 		});
 	});
 

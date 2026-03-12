@@ -95,7 +95,7 @@ describe('Session Manager', () => {
 	});
 
 	describe('closeSession', () => {
-		it('throws "session not found." when session was never started', async () => {
+		it('returns false when session was never started', async () => {
 			const sessionStore = createMockSessionStore(createSessionWithParticipantStates());
 			const sessionManager = createSessionManager({
 				sessionStore,
@@ -104,7 +104,8 @@ describe('Session Manager', () => {
 				transcriptWorker: createMockTranscriptWorker(),
 			});
 
-			await expect(sessionManager.closeSession('session-1')).rejects.toThrow('session not found.');
+			const result = await sessionManager.closeSession('session-1');
+			expect(result).toBe(false);
 		});
 
 		it('awaits processing, calls closeTranscript and generators, deletes session, and returns reportPath and summary', async () => {
@@ -128,7 +129,8 @@ describe('Session Manager', () => {
 				participantDisplayNames: ['Alice'],
 			});
 			expect(result).toEqual({ reportPath: mockReportPath, summary: mockSummaryText });
-			await expect(sessionManager.closeSession('session-1')).rejects.toThrow('session not found.');
+			const secondClose = await sessionManager.closeSession('session-1');
+			expect(secondClose).toBe(false);
 		});
 
 		it('throws when transcriptWorker.closeTranscript throws', async () => {

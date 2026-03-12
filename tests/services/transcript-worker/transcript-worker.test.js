@@ -93,7 +93,7 @@ describe('startTranscript', () => {
 
 describe('enqueueChunk', () => {
     it('throws when transcript not found', async () => {
-        await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Transcript not found');
+        await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Invariant: transcript not found in enqueueChunk');
     });
 
     it('throws when chunkId is not a number', async () => {
@@ -229,7 +229,7 @@ describe('closeTranscript', () => {
     it('removes the transcript from the map', async () => {
         await worker.startTranscript('test-transcript');
         await worker.closeTranscript('test-transcript');
-        await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Transcript not found');
+        await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Invariant: transcript not found in enqueueChunk');
     });
 
     it('retries failed chunks on close', async () => {
