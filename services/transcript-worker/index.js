@@ -1,7 +1,6 @@
 require('dotenv').config();
 
 const { createTranscriptWorker } = require('./transcript-worker');
-const fetch = require('node-fetch');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');

@@ -1,5 +1,4 @@
 require('dotenv').config();
-const fetch = import('node-fetch');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -24,7 +23,21 @@ if (!token) {
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+/*client.on('debug', console.log)
+      .on('warn', console.log)
 
+client.on('raw', (packet) => {
+  if (packet.t === 'VOICE_STATE_UPDATE' || packet.t === 'VOICE_SERVER_UPDATE') {
+    console.log('[RAW VOICE EVENT]', packet.t, packet.d);
+  }
+});
+
+client.on('raw', (packet) => {
+    if (packet.t === 'VOICE_STATE_UPDATE' || packet.t === 'VOICE_SERVER_UPDATE') {
+      console.log('[RAW VOICE EVENT]', packet.t, packet.d);
+    }
+  });
+*/
 client.sessionStore = sessionStore;
 client.botCoordinator = createBotCoordinator(sessionStore);
 
