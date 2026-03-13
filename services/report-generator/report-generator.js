@@ -93,19 +93,20 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
                 report.push(`# Transcript for ${sessionId} on ${channelId} at ${dateTimeStr}`);
                 report.push(`## Participants: ${participantDisplayNames.join(', ')}`);
 
-                if (JSONLine.closure?.autoClose) {
-                    const endedAt = JSONLine.closure.endedAtIso ? new Date(JSONLine.closure.endedAtIso).toLocaleTimeString('en-GB', {
+                if (JSONLine.closure && typeof JSONLine.closure.endedAtIso === 'string') {
+                    const endedAt = new Date(JSONLine.closure.endedAtIso).toLocaleTimeString('en-GB', {
                         hour: '2-digit',
                         minute: '2-digit',
                         second: '2-digit',
                         hour12: false,
-                    }) : 'unknown time';
-                    const reason = JSONLine.closure.reason ?? 'inactivity';
+                    });
                     report.push('');
-                    report.push('## Meeting ended automatically');
-                    report.push(`Reason: ${reason}.`);
-                    report.push(`Ended at: ${endedAt}.`);
-                    report.push('Report may be partial; see gap markers below.');
+                    report.push(`Ended at ${endedAt}.`);
+                    if (JSONLine.closure.autoClose) {
+                        const reason = JSONLine.closure.reason ?? 'inactivity';
+                        report.push(`Reason: ${reason}.`);
+                        report.push('Report may be partial; see gap markers below.');
+                    }
                 }
 
                 report.push('```text');

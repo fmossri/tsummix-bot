@@ -124,11 +124,12 @@ describe('Session Manager', () => {
 			await sessionManager.startSession('session-1');
 			const result = await sessionManager.closeSession('session-1');
 
-			expect(transcriptWorker.closeTranscript).toHaveBeenCalledWith('session-1', {
+			expect(transcriptWorker.closeTranscript).toHaveBeenCalledWith('session-1', expect.objectContaining({
 				channelId: 'voice-123',
 				participantDisplayNames: ['Alice'],
-				closure: null,
-			});
+				closure: expect.objectContaining({ endedAtIso: expect.any(String) }),
+			}));
+			expect(transcriptWorker.closeTranscript.mock.calls[0][1].closure.autoClose).toBeUndefined();
 			expect(result).toEqual({ reportPath: mockReportPath, summary: mockSummaryText });
 			const secondClose = await sessionManager.closeSession('session-1');
 			expect(secondClose).toBe(false);

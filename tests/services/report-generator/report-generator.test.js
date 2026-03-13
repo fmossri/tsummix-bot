@@ -83,6 +83,44 @@ describe('generateReport', () => {
         expect(content).not.toContain('| Alice |   ');
         expect(content).toContain('Real content');
     });
+
+    it('includes "Ended at" when metadata has closure.endedAtIso (manual or auto-close)', async () => {
+        const transcriptContent = createMinimalTranscriptContent({
+            metadata: {
+                type: 'metadata',
+                transcriptId: 't1',
+                channelId: 'ch1',
+                meetingStartIso: '2025-01-15T14:30:00.000Z',
+                participantDisplayNames: ['Alice'],
+                closure: { endedAtIso: '2025-01-15T15:45:00.000Z' },
+            },
+        });
+        mockFs.createReadStream.mockReturnValue(createReadStreamFromString(transcriptContent));
+        await generator.generateReport('any-path');
+        const [, content] = mockFs.writeFileSync.mock.calls[0];
+        expect(content).toMatch(/Ended at \d{2}:\d{2}:\d{2}\./);
+        expect(content).not.toContain('Reason:');
+        expect(content).not.toContain('Meeting ended automatically');
+    });
+
+    it('adds reason and partial note when closure.autoClose is true', async () => {
+        const transcriptContent = createMinimalTranscriptContent({
+            metadata: {
+                type: 'metadata',
+                transcriptId: 't1',
+                channelId: 'ch1',
+                meetingStartIso: '2025-01-15T14:30:00.000Z',
+                participantDisplayNames: ['Alice'],
+                closure: { endedAtIso: '2025-01-15T15:45:00.000Z', autoClose: true, reason: 'inactivity' },
+            },
+        });
+        mockFs.createReadStream.mockReturnValue(createReadStreamFromString(transcriptContent));
+        await generator.generateReport('any-path');
+        const [, content] = mockFs.writeFileSync.mock.calls[0];
+        expect(content).toMatch(/Ended at \d{2}:\d{2}:\d{2}\./);
+        expect(content).toContain('Reason: inactivity.');
+        expect(content).toContain('Report may be partial; see gap markers below.');
+    });
 });
 
 describe('insertSummary', () => {
