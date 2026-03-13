@@ -372,6 +372,113 @@ describe('Session Manager', () => {
 			nowSpy.mockRestore();
 		});
 
+		describe('sendChunks retry logic', () => {
+			it('requeues chunk and retries when enqueueChunk fails then succeeds (transient failure)', async () => {
+				const { EventEmitter } = require('events');
+				const pcmStream = new EventEmitter();
+				const participantStates = new Map([
+					[
+						'u1',
+						{
+							displayName: 'Alice',
+							pcmStream,
+							chunkerState: {
+								samplesBuffer: Buffer.alloc(0),
+								samplesInBuffer: 0,
+								totalSamplesEmitted: 0,
+							},
+						},
+					],
+				]);
+				const session = createSessionWithParticipantStates(participantStates);
+				const sessionStore = createMockSessionStore(session);
+				const transcriptWorker = createMockTranscriptWorker({
+					enqueueChunk: jest.fn()
+						.mockRejectedValueOnce(new Error('worker busy'))
+						.mockRejectedValueOnce(new Error('worker busy'))
+						.mockResolvedValueOnce(undefined),
+				});
+				const sessionManager = createSessionManager({
+					sessionStore,
+					createReportGenerator: () => createMockReportGenerator(),
+					createSummaryGenerator: () => createMockSummaryGenerator(),
+					transcriptWorker,
+				});
+
+				await sessionManager.startSession('session-1');
+				sessionManager.chunkStream('session-1', 'u1');
+				pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+
+				await new Promise((r) => setImmediate(r));
+				await new Promise((r) => setImmediate(r));
+				await new Promise((r) => setImmediate(r));
+
+				expect(transcriptWorker.enqueueChunk).toHaveBeenCalledTimes(3);
+				expect(transcriptWorker.enqueueChunk).toHaveBeenCalledWith('session-1', expect.objectContaining({
+					participantData: { participantId: 'u1', displayName: 'Alice' },
+					chunkId: expect.any(Number),
+				}));
+			});
+
+			it('drops chunk and logs chunk_send_failed after MAX_SEND_RETRIES (permanent failure)', async () => {
+				const logger = require('../../../services/logger/logger');
+				const errorSpy = jest.spyOn(logger, 'error');
+
+				const { EventEmitter } = require('events');
+				const pcmStream = new EventEmitter();
+				const participantStates = new Map([
+					[
+						'u1',
+						{
+							displayName: 'Alice',
+							pcmStream,
+							chunkerState: {
+								samplesBuffer: Buffer.alloc(0),
+								samplesInBuffer: 0,
+								totalSamplesEmitted: 0,
+							},
+						},
+					],
+				]);
+				const session = createSessionWithParticipantStates(participantStates);
+				const sessionStore = createMockSessionStore(session);
+				const transcriptWorker = createMockTranscriptWorker({
+					enqueueChunk: jest.fn().mockRejectedValue(new Error('worker down')),
+				});
+				const sessionManager = createSessionManager({
+					sessionStore,
+					createReportGenerator: () => createMockReportGenerator(),
+					createSummaryGenerator: () => createMockSummaryGenerator(),
+					transcriptWorker,
+				});
+
+				await sessionManager.startSession('session-1');
+				sessionManager.chunkStream('session-1', 'u1');
+				pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+
+				await new Promise((r) => setImmediate(r));
+				await new Promise((r) => setImmediate(r));
+				await new Promise((r) => setImmediate(r));
+				await new Promise((r) => setImmediate(r));
+
+				expect(transcriptWorker.enqueueChunk).toHaveBeenCalledTimes(3);
+				expect(errorSpy).toHaveBeenCalledWith(
+					'session-manager',
+					'chunk_send_failed',
+					'Worker enqueueChunk failed',
+					expect.objectContaining({
+						sessionId: 'session-1',
+						transcriptId: 'session-1',
+						sendRetryCount: 3,
+						errorClass: 'Error',
+						message: 'worker down',
+					})
+				);
+
+				errorSpy.mockRestore();
+			});
+		});
+
 		it('cutChunk: two consecutive cuts in one buffer update start times and state', async () => {
 			const { EventEmitter } = require('events');
 			const pcmStream = new EventEmitter();

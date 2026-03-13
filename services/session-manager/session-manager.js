@@ -3,6 +3,7 @@ const logger = require('../logger/logger');
 const appMetrics = require('../metrics/metrics');
 
 const COMPONENT = 'session-manager';
+const MAX_SEND_RETRIES = 3;
 
 function createSessionManager({
 	sessionStore,
@@ -11,6 +12,13 @@ function createSessionManager({
 	transcriptWorker,
 }) {
     const sessionStates = new Map();
+
+    function isWorkerHealthy() {
+        // v0.3: in process worker only; always healthy.
+        // replace this with a call to an injected HTTP client health probe, 
+        // or add a workerHealth module.
+        return true;
+    }
 
     function cutChunk(sessionId, { participantId, participantState }, targetSamples) {
         const participantData = {
@@ -35,6 +43,7 @@ function createSessionManager({
             const chunk = {
                 chunkId: getNextChunkId(sessionId),
                 participantData: participantData,
+                sendRetryCount: 0,
                 chunkClockTimeMs: chunkClockTimeMs,
                 chunkStartTimeMs: chunkStartTimeMs,
                 audio: wavBuffer,
@@ -78,13 +87,20 @@ function createSessionManager({
 			try {
 				await transcriptWorker.enqueueChunk(sessionId, chunk);
 			} catch (error) {
-				logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed', {
-					sessionId,
-					transcriptId: sessionId,
-					chunkId: chunk?.chunkId,
-					errorClass: error.constructor?.name || 'Error',
-					message: error.message,
-				});
+                chunk.sendRetryCount++;
+
+                if (chunk.sendRetryCount === MAX_SEND_RETRIES) {
+                    logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed', {
+                        sessionId,
+                        transcriptId: sessionId,
+                        chunkId: chunk?.chunkId,
+                        sendRetryCount: chunk.sendRetryCount,
+                        errorClass: error.constructor?.name || 'Error',
+                        message: error.message,
+                    });
+                    continue;
+                }
+                sessionState.chunksQueue.push(chunk);
 				continue;
 			}
 		}
@@ -126,7 +142,6 @@ function createSessionManager({
 			return false;
 		}
 		const TARGET_SAMPLES = 30 * 16000;
-        let chunkClockTimeMs = null;
 		try {
 			const pcmStream = participantState.pcmStream;
 			pcmStream.on('data', (pcmBuffer) => {
