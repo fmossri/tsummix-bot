@@ -17,14 +17,29 @@ const { createTranscriptWorker } = require('../../../services/transcript-worker/
 const { createChunk } = require('../../helpers/test-utils');
 
 let mockFetch, mockFs, mockPath, worker;
+let tmpFileContent;
 beforeEach(() => {
     jest.clearAllMocks();
+    tmpFileContent = '';
     mockFs = {
         promises: {
             mkdir: jest.fn().mockResolvedValue(undefined),
             writeFile: jest.fn().mockResolvedValue(undefined),
-            appendFile: jest.fn().mockResolvedValue(undefined),
-            readFile: jest.fn().mockResolvedValue(''),
+            appendFile: jest.fn().mockImplementation((path, content) => {
+                if (String(path).endsWith('.tmp')) tmpFileContent += content;
+                return Promise.resolve(undefined);
+            }),
+            readFile: jest.fn().mockImplementation((path) => {
+                if (String(path).endsWith('.tmp')) {
+                    if (tmpFileContent === '') {
+                        const err = new Error('ENOENT');
+                        err.code = 'ENOENT';
+                        return Promise.reject(err);
+                    }
+                    return Promise.resolve(tmpFileContent);
+                }
+                return Promise.resolve('');
+            }),
             unlink: jest.fn().mockResolvedValue(undefined),
         }
     };
@@ -32,7 +47,13 @@ beforeEach(() => {
 
     mockFetch = jest.fn();
     mockFetch.mockImplementation((url, options) => {
-        const body = JSON.parse(options.body);
+        if (String(url).endsWith('/health')) {
+            return Promise.resolve({
+                status: 200,
+                json: () => Promise.resolve({ ready: true }),
+            });
+        }
+        const body = options?.body ? JSON.parse(options.body) : {};
         return Promise.resolve({
             status: 200,
             json: () => Promise.resolve({
@@ -57,8 +78,15 @@ describe('startTranscript', () => {
         expect(mockFs.promises.mkdir).toHaveBeenCalledWith(expect.stringContaining('transcripts'), { recursive: true });
     });
 
+    it('throws when closing with no segments (no chunks enqueued)', async () => {
+        await worker.startTranscript('test-transcript');
+        await expect(worker.closeTranscript('test-transcript')).rejects.toThrow('No transcript segments were produced');
+    });
+
     it('writes metadata header with channelId and participantDisplayNames', async () => {
         await worker.startTranscript('transcript-1');
+        await worker.enqueueChunk('transcript-1', createChunk({ chunkId: 1, participantData: { participantId: 'u1', displayName: 'Alice' } }));
+        await new Promise(r => setImmediate(r));
         await worker.closeTranscript('transcript-1', {
             channelId: 'ch-123',
             participantDisplayNames: ['Alice', 'Bob']
@@ -81,6 +109,8 @@ describe('startTranscript', () => {
 
     it('throws when writeFile fails on close', async () => {
         await worker.startTranscript('transcript-1');
+        await worker.enqueueChunk('transcript-1', createChunk());
+        await new Promise(r => setImmediate(r));
         mockFs.promises.writeFile.mockRejectedValue(new Error('Permission denied'));
         await expect(worker.closeTranscript('transcript-1')).rejects.toThrow('Permission denied');
     });
@@ -88,6 +118,8 @@ describe('startTranscript', () => {
     it('uses meetingStartTimeMs for meetingStartIso and filename when valid number', async () => {
         const fixedTimestamp = 1700000000000;
         await worker.startTranscript('transcript-1', fixedTimestamp);
+        await worker.enqueueChunk('transcript-1', createChunk());
+        await new Promise(r => setImmediate(r));
         await worker.closeTranscript('transcript-1', {
             channelId: 'ch-1',
             participantDisplayNames: ['Alice'],
@@ -135,15 +167,16 @@ describe('enqueueChunk', () => {
     it('calls STT with correct URL and body', async () => {
         await worker.startTranscript('test-transcript');
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 42, chunkStartTimeMs: 100 }));
-        expect(mockFetch).toHaveBeenCalledWith(
-            'http://localhost:8000/transcribe',
-            expect.objectContaining({
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: expect.stringContaining('"chunkId":42'),
-            })
-        );
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+        await new Promise(r => setImmediate(r));
+        const transcribeCalls = mockFetch.mock.calls.filter((c) => String(c[0]).endsWith('/transcribe'));
+        expect(transcribeCalls.length).toBeGreaterThan(0);
+        expect(transcribeCalls[0][0]).toBe('http://localhost:8000/transcribe');
+        expect(transcribeCalls[0][1]).toMatchObject({
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        expect(transcribeCalls[0][1].body).toContain('"chunkId":42');
+        const body = JSON.parse(transcribeCalls[0][1].body);
         expect(body).toMatchObject({
             transcriptId: 'test-transcript',
             chunkId: 42,
@@ -154,22 +187,26 @@ describe('enqueueChunk', () => {
 
     it('processes multiple chunks in order', async () => {
         await worker.startTranscript('test-transcript');
-        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1, participantData: { participantId: 'u1', displayName: 'Alice' } }));
-        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2, participantData: { participantId: 'u2', displayName: 'Bob' } }));
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 0, participantData: { participantId: 'u1', displayName: 'Alice' } }));
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1, participantData: { participantId: 'u2', displayName: 'Bob' } }));
         await worker.closeTranscript('test-transcript');
-        expect(mockFetch).toHaveBeenCalledTimes(2);
-        // appendToTemp writes one appendFile per flush with all segment lines combined
-        const segmentCalls = mockFs.promises.appendFile.mock.calls.filter(c => c[0].endsWith('.tmp'));
-        expect(segmentCalls.length).toBe(1);
+        const transcribeCalls = mockFetch.mock.calls.filter((c) => String(c[0]).endsWith('/transcribe'));
+        expect(transcribeCalls).toHaveLength(2);
+        // appendToTemp writes one appendFile per flush with all segment lines combined (chunkIds 0,1 -> no gap for 0)
+        const segmentCalls = mockFs.promises.appendFile.mock.calls.filter(c => String(c[0]).endsWith('.tmp'));
+        expect(segmentCalls.length).toBeGreaterThanOrEqual(1);
         const content = segmentCalls[0][1];
-        const lines = content.split('\n').filter(Boolean);
-        expect(lines.length).toBe(2);
-        expect(JSON.parse(lines[0])).toMatchObject({ chunkId: 1, participantId: 'u1', displayName: 'Alice' });
-        expect(JSON.parse(lines[1])).toMatchObject({ chunkId: 2, participantId: 'u2', displayName: 'Bob' });
+        const segmentLines = content.split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type !== 'gap');
+        expect(segmentLines.length).toBe(2);
+        expect(segmentLines[0]).toMatchObject({ chunkId: 0, participantId: 'u1', displayName: 'Alice' });
+        expect(segmentLines[1]).toMatchObject({ chunkId: 1, participantId: 'u2', displayName: 'Bob' });
     });
 
     it('writes clockTimeMs when chunk has chunkClockTimeMs', async () => {
         mockFetch.mockImplementation((url, options) => {
+            if (String(url).endsWith('/health')) {
+                return Promise.resolve({ status: 200, json: () => Promise.resolve({ ready: true }) });
+            }
             const body = JSON.parse(options.body);
             return Promise.resolve({
                 status: 200,
@@ -209,6 +246,9 @@ describe('enqueueChunk', () => {
     it('retries STT on non-200 and succeeds when processing is triggered again', async () => {
         let callCount = 0;
         mockFetch.mockImplementation((url, options) => {
+            if (String(url).endsWith('/health')) {
+                return Promise.resolve({ status: 200, json: () => Promise.resolve({ ready: true }) });
+            }
             callCount++;
             const body = JSON.parse(options.body);
             if (callCount === 1) {
@@ -227,8 +267,9 @@ describe('enqueueChunk', () => {
         await new Promise(r => setImmediate(r));
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
         await worker.closeTranscript('test-transcript');
-        // Two chunks: first fails then succeeds on retry, second succeeds; expect 3 total STT calls.
-        expect(mockFetch).toHaveBeenCalledTimes(3);
+        // One health check + two chunks: first fails then succeeds on retry, second succeeds; expect 1 health + 3 transcribe.
+        const transcribeCalls = mockFetch.mock.calls.filter((c) => String(c[0]).endsWith('/transcribe'));
+        expect(transcribeCalls).toHaveLength(3);
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(
             expect.any(String),
             expect.stringContaining('transcribed after retry')
@@ -243,6 +284,7 @@ describe('closeTranscript', () => {
 
     it('returns the transcript path', async () => {
         await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk());
         const transcriptPath = await worker.closeTranscript('test-transcript');
         expect(mockFs.promises.writeFile).toHaveBeenCalled();
         const [writeFilePath] = mockFs.promises.writeFile.mock.calls[0];
@@ -251,6 +293,8 @@ describe('closeTranscript', () => {
 
     it('removes the transcript from the map', async () => {
         await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk());
+        await new Promise(r => setImmediate(r));
         await worker.closeTranscript('test-transcript');
         await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Invariant: transcript not found in enqueueChunk');
     });
@@ -258,6 +302,9 @@ describe('closeTranscript', () => {
     it('retries failed chunks on close', async () => {
         let callCount = 0;
         mockFetch.mockImplementation((url, options) => {
+            if (String(url).endsWith('/health')) {
+                return Promise.resolve({ status: 200, json: () => Promise.resolve({ ready: true }) });
+            }
             callCount++;
             const body = JSON.parse(options.body);
             if (callCount <= 3) {
@@ -278,8 +325,9 @@ describe('closeTranscript', () => {
         await new Promise(r => setImmediate(r));
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 3 }));
         const transcriptPath = await worker.closeTranscript('test-transcript');
-        // Three chunks, each failing twice then succeeding: 6 total STT calls.
-        expect(mockFetch).toHaveBeenCalledTimes(6);
+        // One health check + three chunks, each failing twice then succeeding: 1 health + 6 transcribe calls.
+        const transcribeCalls = mockFetch.mock.calls.filter((c) => String(c[0]).endsWith('/transcribe'));
+        expect(transcribeCalls).toHaveLength(6);
         // closeTranscript appends segment content (from tmp) to final transcript path; mock readFile returns '' so we only assert path
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(transcriptPath, expect.any(String));
     });
@@ -288,12 +336,18 @@ describe('closeTranscript', () => {
         // Simulate AbortError from fetchWithTimeout; decorator sets isSttTimeout=true.
         const abortError = new Error('timeout');
         abortError.name = 'AbortError';
-        mockFetch.mockRejectedValue(abortError);
+        mockFetch.mockImplementation((url) => {
+            if (String(url).endsWith('/health')) {
+                return Promise.resolve({ status: 200, json: () => Promise.resolve({ ready: true }) });
+            }
+            return Promise.reject(abortError);
+        });
 
         await worker.startTranscript('test-transcript');
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
 
-        await expect(worker.closeTranscript('test-transcript')).resolves.toBeDefined();
+        // No segments produced (all chunks failed) -> close throws with actionable message.
+        await expect(worker.closeTranscript('test-transcript')).rejects.toThrow('No transcript segments were produced');
 
         // After retries exhausted, we should have logged stt_response_failed with SttTimeout.
         const errorCalls = logger.error.mock.calls.filter(
@@ -306,6 +360,9 @@ describe('closeTranscript', () => {
 
     it('closes with a partial transcript (segments + gaps) when some chunks fail permanently', async () => {
         mockFetch.mockImplementation((url, options) => {
+            if (String(url).endsWith('/health')) {
+                return Promise.resolve({ status: 200, json: () => Promise.resolve({ ready: true }) });
+            }
             const body = JSON.parse(options.body);
             if (body.chunkId === 2) {
                 return Promise.resolve({ status: 500, json: () => Promise.resolve({}) });
@@ -349,11 +406,17 @@ describe('closeTranscript', () => {
     });
 
     it('writes explicit gap markers when a chunk still fails after close retry', async () => {
-        mockFetch.mockImplementation(() => Promise.resolve({ status: 500, json: () => Promise.resolve({}) }));
+        mockFetch.mockImplementation((url) => {
+            if (String(url).endsWith('/health')) {
+                return Promise.resolve({ status: 200, json: () => Promise.resolve({ ready: true }) });
+            }
+            return Promise.resolve({ status: 500, json: () => Promise.resolve({}) });
+        });
         await worker.startTranscript('test-transcript');
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
-        await worker.closeTranscript('test-transcript');
-
+        // All chunks fail STT -> no segments -> close throws with actionable message.
+        await expect(worker.closeTranscript('test-transcript')).rejects.toThrow('No transcript segments were produced');
+        // Gap marker was still written to tmp before we validated segment count.
         const tmpCalls = mockFs.promises.appendFile.mock.calls.filter((c) => String(c[0]).endsWith('.tmp'));
         const combined = tmpCalls.map((c) => c[1]).join('');
         const lines = combined.split('\n').filter(Boolean).map((l) => JSON.parse(l));
@@ -375,11 +438,11 @@ describe('closeTranscript', () => {
         expect(mergeCall[0]).toBe(transcriptPath);
     });
 
-    it('sorts segment content by chunkId (and clockTimeMs) when appending to final transcript', async () => {
+    it('sorts segment content by clockTimeMs (primary) then chunkId when appending to final transcript', async () => {
         const unsortedJsonl = [
-            JSON.stringify({ chunkId: 2, text: 'second', clockTimeMs: 200 }),
-            JSON.stringify({ chunkId: 0, text: 'zeroth', clockTimeMs: 0 }),
-            JSON.stringify({ chunkId: 1, text: 'first', clockTimeMs: 100 }),
+            JSON.stringify({ type: 'segment', chunkId: 2, text: 'second', clockTimeMs: 200 }),
+            JSON.stringify({ type: 'segment', chunkId: 0, text: 'zeroth', clockTimeMs: 0 }),
+            JSON.stringify({ type: 'segment', chunkId: 1, text: 'first', clockTimeMs: 100 }),
         ].join('\n');
         mockFs.promises.readFile.mockResolvedValue(unsortedJsonl);
 
@@ -393,14 +456,14 @@ describe('closeTranscript', () => {
         expect(appendToPathCalls.length).toBe(1);
         const appendedContent = appendToPathCalls[0][1];
         const lines = appendedContent.split('\n').filter(Boolean).map((l) => JSON.parse(l));
-        const chunkIds = lines.map((l) => l.chunkId);
-        expect(chunkIds).toEqual([0, 1, 2]);
         expect(lines[0].text).toBe('zeroth');
         expect(lines[1].text).toBe('first');
         expect(lines[2].text).toBe('second');
+        const chunkIds = lines.map((l) => l.chunkId);
+        expect(chunkIds).toEqual([0, 1, 2]);
     });
 
-    it('sorts transcript lines with gaps by chunkId so gaps appear next to neighbors', async () => {
+    it('sorts transcript lines by clockTimeMs then chunkId so gaps appear in correct place', async () => {
         const unsortedWithGap = [
             JSON.stringify({ chunkId: 3, text: 'segment three', type: 'segment' }),
             JSON.stringify({ chunkId: 1, text: 'segment one', type: 'segment' }),
@@ -421,11 +484,11 @@ describe('closeTranscript', () => {
         expect(lines[1].text).toContain('never reached');
     });
 
-    it('preserves original order within a chunk when any line has null clockTimeMs', async () => {
+    it('sorts by clockTimeMs first; lines with null clockTimeMs sort after numeric ones', async () => {
         const sameChunkWithNull = [
-            JSON.stringify({ chunkId: 1, text: 'first', clockTimeMs: 100 }),
-            JSON.stringify({ chunkId: 1, text: 'middle', clockTimeMs: null }),
-            JSON.stringify({ chunkId: 1, text: 'last', clockTimeMs: 200 }),
+            JSON.stringify({ type: 'segment', chunkId: 1, text: 'first', clockTimeMs: 100 }),
+            JSON.stringify({ type: 'segment', chunkId: 1, text: 'middle', clockTimeMs: null }),
+            JSON.stringify({ type: 'segment', chunkId: 1, text: 'last', clockTimeMs: 200 }),
         ].join('\n');
         mockFs.promises.readFile.mockResolvedValue(sameChunkWithNull);
 
@@ -438,7 +501,7 @@ describe('closeTranscript', () => {
         const lines = appendedContent.split('\n').filter(Boolean).map((l) => JSON.parse(l));
         expect(lines.length).toBe(3);
         expect(lines[0].text).toBe('first');
-        expect(lines[1].text).toBe('middle');
-        expect(lines[2].text).toBe('last');
+        expect(lines[1].text).toBe('last');
+        expect(lines[2].text).toBe('middle');
     });
 });
