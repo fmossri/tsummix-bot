@@ -10,7 +10,9 @@ import io
 import time
 import base64
 import traceback
+import wave
 
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
@@ -80,6 +82,25 @@ def health():
             "device": getattr(app.state, "device", None),
     }
 
+def _wav_bytes_to_float32_mono(audio_bytes: bytes) -> tuple[np.ndarray, int]:
+    """Decode WAV bytes (16-bit mono or stereo) to float32 mono at native sample rate.
+    Returns (samples_float32, sample_rate). Expects 16 kHz mono from the Node worker.
+    """
+    with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
+        n_channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        framerate = wav_file.getframerate()
+        n_frames = wav_file.getnframes()
+        raw = wav_file.readframes(n_frames)
+    if sample_width != 2:
+        raise ValueError(f"Unsupported WAV sample width: {sample_width} (expected 2)")
+    # 16-bit signed little-endian -> float32 in [-1, 1]
+    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    if n_channels > 1:
+        samples = samples.reshape(-1, n_channels).mean(axis=1)
+    return samples, framerate
+
+
 @app.post("/transcribe")
 async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
     if not app.state.ready or app.state.model is None:
@@ -88,8 +109,8 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
     try:
         t0 = time.perf_counter()
         audio_bytes = base64.b64decode(request.audio)
-        audio_stream = io.BytesIO(audio_bytes)
-        segments, info = model.transcribe(audio_stream, language="pt")
+        audio_float32, sample_rate = _wav_bytes_to_float32_mono(audio_bytes)
+        segments, info = model.transcribe(audio_float32, language="pt")
         segments = [
             Segment(
                 segmentIndex=i, 
