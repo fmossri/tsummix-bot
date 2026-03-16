@@ -1,22 +1,22 @@
 import os
 import sys
-
-_here = os.path.dirname(os.path.abspath(__file__))
-if _here not in sys.path:
-    sys.path.insert(0, _here)
-import cuda_env  # noqa: E402 — set LD_LIBRARY_PATH before faster_whisper
-
 import io
 import time
 import base64
 import traceback
 import wave
+from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from pydantic import BaseModel
+
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+import cuda_env  # noqa: E402 — set LD_LIBRARY_PATH before faster_whisper
 
 class Segment(BaseModel):
     segmentIndex: int
@@ -50,30 +50,35 @@ use_local = raw.strip().lower() == "true"
 device_flag = os.getenv("STT_DEVICE") if os.getenv("STT_DEVICE") else "auto"
 language_flag = os.getenv("STT_LANGUAGE") if os.getenv("STT_LANGUAGE") else ""
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.ready = False
+    app.state.model = None
+    app.state.model_id = model_id
+    app.state.device = device_flag
+    try:
+        model = WhisperModel(
+            model_size_or_path=model_id,
+            device=device_flag,
+            download_root=download_path,
+            local_files_only=use_local,
+        )
+        app.state.model = model
+        app.state.ready = True
+    except Exception:
+        traceback.print_exc()
+        app.state.ready = False
+    yield
+    # No explicit teardown required; allow process exit to release resources.
+
+
 app = FastAPI(
     title="STT Wrapper",
     description="A wrapper for the STT model",
     version="0.1.0",
+    lifespan=lifespan,
 )
-app.state.ready = False
-app.state.model = None
-app.state.model_id = model_id
-app.state.device = device_flag
-
-@app.on_event("startup")
-async def startup():
-    try:
-        model = WhisperModel( 
-            model_size_or_path=model_id, 
-            device=device_flag,
-            download_root=download_path, 
-            local_files_only=use_local
-        )
-        app.state.model = model
-        app.state.ready = True
-    except Exception as e:
-        traceback.print_exc()
-        app.state.ready = False
 
 @app.get("/health")
 def health():
