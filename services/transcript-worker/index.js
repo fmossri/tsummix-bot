@@ -1,5 +1,3 @@
-require('dotenv').config();
-
 const { workerConfig } = require('../../config/index.js');
 const { createTranscriptWorker } = require('./transcript-worker');
 const fs = require('node:fs');

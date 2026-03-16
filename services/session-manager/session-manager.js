@@ -1,4 +1,4 @@
-const { convertPCMToWav } = require('./convert-pcm-to-wav.js');
+const { convertPCMToWav } = require('../../utils/convert-pcm-to-wav.js');
 const logger = require('../logger/logger');
 const appMetrics = require('../metrics/metrics');
 
@@ -274,7 +274,7 @@ function createSessionManager({
         }
     }
 
-	async function startSession(sessionId) {
+	async function startSession(sessionId, sessionData) {
         try {
             const session = sessionStore.getSessionById(sessionId);
             if (!session) {

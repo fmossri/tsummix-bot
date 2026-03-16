@@ -57,10 +57,10 @@ function requireDiscordToken(token) {
     }
     return token;
 }
-function validateWorkerUseLocal() {
-    const useLocal = getBoolean('WORKER_USE_LOCAL', true);
+function validateUseLocal(name) {
+    const useLocal = getBoolean(`${name}_USE_LOCAL`, true);
     if (!useLocal) {
-        requireBaseUrl('WORKER_BASE_URL');
+        requireBaseUrl(`${name}_BASE_URL`);
     }
     return useLocal;
 }
@@ -68,8 +68,8 @@ function validateWorkerUseLocal() {
 module.exports = {
     //Client config
     discordToken: requireDiscordToken(process.env.DISCORD_TOKEN),
-    //Coordinator config
-    coordinatorConfig: {
+    //Controller config
+    controllerConfig: {
         meetingTimeouts: {
             //Timeout for explicitly pausing the meeting
             explicitPauseMs: 30 * 60 * 1000,
@@ -83,6 +83,10 @@ module.exports = {
     },
     //Manager config
     managerConfig: {
+        //Whether the manager runs in-process or is called over HTTP
+        localManager: validateUseLocal('MANAGER'),
+        //Port for the manager HTTP server
+        managerPort: getInt('MANAGER_PORT', 3002),
         //Base URL for the worker HTTP server
         workerBaseUrl: !getBoolean('WORKER_USE_LOCAL', true) ? requireBaseUrl('WORKER_BASE_URL') : 'http://localhost:3000',
         //Max retries for enqueuing chunks to the worker
@@ -93,7 +97,7 @@ module.exports = {
     //Worker config
     workerConfig: {
         //Whether the worker runs in-process or is called over HTTP
-        localWorker: validateWorkerUseLocal(),
+        localWorker: validateUseLocal('WORKER'),
         //Port for the worker HTTP server
         workerPort: getInt('WORKER_PORT', 3000),
         //Base URL for the STT wrapper
