@@ -1,35 +1,19 @@
-const wav = require('node-wav');
 const logger = require('../logger/logger');
 const appMetrics = require('../metrics/metrics');
-const { sttTimeoutMs } = require('../../config/timeouts.js');
+const { isValidWav } = require('../../utils/is-valid-wav.js');
 
 const COMPONENT = 'transcript-worker';
-/** All timing in this module uses process-local Date.now() (single, monotonic time base). */
-const WAV_SAMPLE_RATE = 16000;
-const WAV_CHANNELS = 1;
-const MAX_RETRIES = 3;
-const FLUSH_AFTER_PROCESSED_CHUNKS = 5;
-const STT_READY_TIMEOUT_MS = 120000;
-const STT_READY_POLL_MS = 2000;
 
-function isValidWav(audioBuffer) {
-	try {
-		const result = wav.decode(audioBuffer);
-		if (result.sampleRate !== WAV_SAMPLE_RATE || result.channelData.length !== WAV_CHANNELS) {
-			return false;
-		}
-		return true;
-	} catch {
-		return false;
-	}
-}
+function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 
-function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
+    const { maxRetries: MAX_RETRIES, flushAfterProcessedChunks: FLUSH_AFTER_PROCESSED_CHUNKS } = workerConfig;
+	const { sttBaseUrl, workerTimeouts } = workerConfig;
+	const transcriptsDir = workerConfig.transcriptsDir || pathImpl.join(__dirname, 'transcripts');
 	const transcriptsMap = new Map();
 	let sttReadyWaited = false;
 
 	async function waitForSttReady() {
-		const deadline = Date.now() + STT_READY_TIMEOUT_MS;
+		const deadline = Date.now() + workerTimeouts.sttReadyTimeoutMs;
 		const healthUrl = sttBaseUrl.replace(/\/$/, '') + '/health';
 		while (Date.now() < deadline) {
 			try {
@@ -37,9 +21,9 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				const body = await res.json();
 				if (body && body.ready === true) return;
 			} catch (_) { /* ignore */ }
-			await new Promise((r) => setTimeout(r, STT_READY_POLL_MS));
+			await new Promise((r) => setTimeout(r, workerTimeouts.sttReadyPollMs));
 		}
-		throw new Error(`STT wrapper not ready within ${STT_READY_TIMEOUT_MS}ms`);
+		throw new Error(`STT wrapper not ready within ${workerTimeouts.sttReadyTimeoutMs}ms`);
 	}
 
 	function getTotalQueueDepth() {
@@ -69,11 +53,11 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
             if (typeof meetingStartTimeMs !== 'number') {
                 meetingStartTimeMs = Date.now();
             }
-			await fsImpl.promises.mkdir(pathImpl.join(__dirname, 'transcripts'), { recursive: true });
+			await fsImpl.promises.mkdir(transcriptsDir, { recursive: true });
             const meetingStartTimeIso = new Date(meetingStartTimeMs).toISOString();
 			const timestamp = meetingStartTimeIso.replace(/[:.]/g, '-');
-			const transcriptPath = pathImpl.join(__dirname, 'transcripts', `${transcriptId}_${timestamp}.jsonl`);
-			const tempFilePath = pathImpl.join(__dirname, 'transcripts', `${transcriptId}_${timestamp}.jsonl.tmp`);
+			const transcriptPath = pathImpl.join(transcriptsDir, `${transcriptId}_${timestamp}.jsonl`);
+			const tempFilePath = pathImpl.join(transcriptsDir, `${transcriptId}_${timestamp}.jsonl.tmp`);
 
 			transcriptsMap.set(transcriptId, {
 				chunksQueue: [],
@@ -352,7 +336,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 							chunkStartTimeMs: chunk.chunkStartTimeMs,
 							audio: audioBuffer,
 						}),
-					}, sttTimeoutMs);
+					}, workerTimeouts.sttTimeoutMs);
 
 					appMetrics.increment('stt_calls_total');
 					countedCall = true;
@@ -581,7 +565,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				channelId: channelId ?? null,
 				filePath: transcriptPath,
 			});
-			return transcriptPath;
+			return true;
 		} catch (error) {
 			logger.error(COMPONENT, 'transcript_close_failed', 'Failed to close transcript', {
 				transcriptId,

@@ -63,8 +63,12 @@ beforeEach(() => {
         });
     });
 
-    worker = createTranscriptWorker({
+    const workerConfig = {
         sttBaseUrl: 'http://localhost:8000',
+        workerTimeouts: { sttTimeoutMs: 5000, sttReadyTimeoutMs: 120000, sttReadyPollMs: 2000 },
+    };
+    worker = createTranscriptWorker({
+        workerConfig,
         fetchImpl: mockFetch,
         fsImpl: mockFs,
         pathImpl: mockPath,
@@ -282,13 +286,12 @@ describe('closeTranscript', () => {
         await expect(worker.closeTranscript('test-transcript')).rejects.toThrow('Transcript not found');
     });
 
-    it('returns the transcript path', async () => {
+    it('returns true on success', async () => {
         await worker.startTranscript('test-transcript');
         await worker.enqueueChunk('test-transcript', createChunk());
-        const transcriptPath = await worker.closeTranscript('test-transcript');
+        const result = await worker.closeTranscript('test-transcript');
+        expect(result).toBe(true);
         expect(mockFs.promises.writeFile).toHaveBeenCalled();
-        const [writeFilePath] = mockFs.promises.writeFile.mock.calls[0];
-        expect(transcriptPath).toBe(writeFilePath);
     });
 
     it('removes the transcript from the map', async () => {
@@ -324,12 +327,13 @@ describe('closeTranscript', () => {
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
         await new Promise(r => setImmediate(r));
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 3 }));
-        const transcriptPath = await worker.closeTranscript('test-transcript');
+        await worker.closeTranscript('test-transcript');
+        const [writeFilePath] = mockFs.promises.writeFile.mock.calls[0];
         // One health check + three chunks, each failing twice then succeeding: 1 health + 6 transcribe calls.
         const transcribeCalls = mockFetch.mock.calls.filter((c) => String(c[0]).endsWith('/transcribe'));
         expect(transcribeCalls).toHaveLength(6);
-        // closeTranscript appends segment content (from tmp) to final transcript path; mock readFile returns '' so we only assert path
-        expect(mockFs.promises.appendFile).toHaveBeenCalledWith(transcriptPath, expect.any(String));
+        // closeTranscript appends segment content (from tmp) to final transcript path
+        expect(mockFs.promises.appendFile).toHaveBeenCalledWith(writeFilePath, expect.any(String));
     });
 
     it('treats AbortError as timeout and eventually moves chunk to failedChunks', async () => {
@@ -383,12 +387,10 @@ describe('closeTranscript', () => {
         await new Promise((r) => setImmediate(r));
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 3 }));
 
-        const transcriptPath = await worker.closeTranscript('test-transcript', {
+        await worker.closeTranscript('test-transcript', {
             channelId: 'ch-123',
             participantDisplayNames: ['Alice'],
         });
-
-        expect(transcriptPath).toBeDefined();
 
         const tmpCalls = mockFs.promises.appendFile.mock.calls.filter((c) => String(c[0]).endsWith('.tmp'));
         const combined = tmpCalls.map((c) => c[1]).join('');
@@ -427,11 +429,11 @@ describe('closeTranscript', () => {
     });
 
     it('waits for queued chunks to be transcribed and flushed before returning', async () => {
-        await worker.startTranscript('test-transcript');
+        const transcriptPath = await worker.startTranscript('test-transcript');
         await worker.enqueueChunk('test-transcript', createChunk());
         // closeTranscript awaits processingPromise before returning; if it didn't, it could return
         // before processNextChunk finishes and appendFile would not have been called yet.
-        const transcriptPath = await worker.closeTranscript('test-transcript');
+        await worker.closeTranscript('test-transcript');
         // Segment is written to tmp, then closeTranscript appends tmp content to transcript path (mock readFile returns '').
         const mergeCall = mockFs.promises.appendFile.mock.calls.find(c => c[0] === transcriptPath);
         expect(mergeCall).toBeDefined();
@@ -446,8 +448,8 @@ describe('closeTranscript', () => {
         ].join('\n');
         mockFs.promises.readFile.mockResolvedValue(unsortedJsonl);
 
-        await worker.startTranscript('test-transcript');
-        const transcriptPath = await worker.closeTranscript('test-transcript', {
+        const transcriptPath = await worker.startTranscript('test-transcript');
+        await worker.closeTranscript('test-transcript', {
             channelId: 'ch-1',
             participantDisplayNames: ['Alice'],
         });
@@ -471,8 +473,8 @@ describe('closeTranscript', () => {
         ].join('\n');
         mockFs.promises.readFile.mockResolvedValue(unsortedWithGap);
 
-        await worker.startTranscript('test-transcript');
-        const transcriptPath = await worker.closeTranscript('test-transcript');
+        const transcriptPath = await worker.startTranscript('test-transcript');
+        await worker.closeTranscript('test-transcript');
 
         const appendToPathCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0] === transcriptPath);
         expect(appendToPathCalls.length).toBe(1);
@@ -492,8 +494,8 @@ describe('closeTranscript', () => {
         ].join('\n');
         mockFs.promises.readFile.mockResolvedValue(sameChunkWithNull);
 
-        await worker.startTranscript('test-transcript');
-        const transcriptPath = await worker.closeTranscript('test-transcript');
+        const transcriptPath = await worker.startTranscript('test-transcript');
+        await worker.closeTranscript('test-transcript');
 
         const appendToPathCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0] === transcriptPath);
         expect(appendToPathCalls.length).toBe(1);

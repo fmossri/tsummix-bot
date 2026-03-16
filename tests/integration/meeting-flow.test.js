@@ -3,6 +3,9 @@
  * Replaces the former contract test; fully mocked (Discord, STT, LLM).
  */
 
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 const { sessionStore } = require('../../session.js');
 const { createSessionManager } = require('../../services/session-manager/session-manager.js');
 const { createBotCoordinator } = require('../../coordinator/bot-coordinator.js');
@@ -76,10 +79,16 @@ function createClientWithMocks({ workerOverrides = {}, sessionManagerOverrides =
 		createReportGenerator: () => mockReportGen,
 		createSummaryGenerator: () => mockSummaryGen,
 		transcriptWorker: mockWorker,
+		managerConfig: { maxRetries: 3 },
 		...sessionManagerOverrides,
 	});
 
-	const coordinator = createBotCoordinator(sessionStore);
+	const coordinator = createBotCoordinator({ meetingTimeouts: {
+		explicitPauseMs: 30 * 60 * 1000,
+		pausedEmptyRoomMs: 15 * 60 * 1000,
+		emptyRoomMs: 5 * 60 * 1000,
+		uiTimeoutMs: 60 * 1000,
+	}}, sessionStore);
 
 	const client = {
 		sessionStore,
@@ -249,8 +258,14 @@ describe('meeting flow integration', () => {
 			createReportGenerator: () => mockReportGen,
 			createSummaryGenerator: () => mockSummaryGen,
 			transcriptWorker: mockWorker,
+			managerConfig: { maxRetries: 3 },
 		});
-		const coordinator = createBotCoordinator(sessionStore);
+		const coordinator = createBotCoordinator({ meetingTimeouts: {
+			explicitPauseMs: 30 * 60 * 1000,
+			pausedEmptyRoomMs: 15 * 60 * 1000,
+			emptyRoomMs: 5 * 60 * 1000,
+			uiTimeoutMs: 60 * 1000,
+		}}, sessionStore);
 		const client = { sessionStore, sessionManager, botCoordinator: coordinator };
 
 		const sessionId = 'session-1';
@@ -278,8 +293,14 @@ describe('meeting flow integration', () => {
 			createReportGenerator: () => mockReportGen,
 			createSummaryGenerator: () => mockSummaryGen,
 			transcriptWorker: mockWorker,
+			managerConfig: { maxRetries: 3 },
 		});
-		const coordinator = createBotCoordinator(sessionStore);
+		const coordinator = createBotCoordinator({ meetingTimeouts: {
+			explicitPauseMs: 30 * 60 * 1000,
+			pausedEmptyRoomMs: 15 * 60 * 1000,
+			emptyRoomMs: 5 * 60 * 1000,
+			uiTimeoutMs: 60 * 1000,
+		}}, sessionStore);
 		const client = { sessionStore, sessionManager, botCoordinator: coordinator };
 
 		const sessionId = 'session-1';
@@ -328,8 +349,14 @@ describe('meeting flow integration', () => {
 				});
 			});
 
-			const worker = createTranscriptWorker({
+			const workerConfig = {
 				sttBaseUrl: 'http://localhost:9999',
+				workerTimeouts: { sttTimeoutMs: 5000, sttReadyTimeoutMs: 120000, sttReadyPollMs: 2000 },
+				// Write transcripts for this test into a temp directory instead of the repo.
+				transcriptsDir: path.join(os.tmpdir(), 'tsummix-worker-test'),
+			};
+			const worker = createTranscriptWorker({
+				workerConfig,
 				fetchImpl: mockFetch,
 				fsImpl: require('node:fs'),
 				pathImpl: require('node:path'),
@@ -342,8 +369,14 @@ describe('meeting flow integration', () => {
 				createReportGenerator: () => mockReportGen,
 				createSummaryGenerator: () => mockSummaryGen,
 				transcriptWorker: worker,
+				managerConfig: { maxRetries: 3 },
 			});
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator({ meetingTimeouts: {
+				explicitPauseMs: 30 * 60 * 1000,
+				pausedEmptyRoomMs: 15 * 60 * 1000,
+				emptyRoomMs: 5 * 60 * 1000,
+				uiTimeoutMs: 60 * 1000,
+			}}, sessionStore);
 			const client = { sessionStore, sessionManager, botCoordinator: coordinator };
 
 			const sessionId = 'session-1';
