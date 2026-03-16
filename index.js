@@ -1,22 +1,17 @@
-require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
 
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
+const config = require('./config/index.js');
 const { sessionStore } = require('./session.js');
 const { createSessionManager } = require('./services/session-manager/session-manager.js');
-const { createTranscriptWorker } = require('./services/transcript-worker/transcript-worker.js');
+const { getTranscriptWorker } = require('./services/transcript-worker/get-transcript-worker.js');
 const { createReportGenerator } = require('./services/report-generator/report-generator.js');
 const { createSummaryGenerator } = require('./services/report-generator/summary-generator.js');
 const { createBotCoordinator } = require('./coordinator/bot-coordinator.js');
 
+const token = config.discordToken;
 
-const { DISCORD_TOKEN: token, STT_BASE_URL: sttBaseUrl } = process.env;
-
-if (!sttBaseUrl) {
-    console.error('STT_BASE_URL must be set in .env (e.g. http://localhost:8000)');
-    process.exit(1);
-}
 if (!token) {
     console.error('DISCORD_TOKEN must be set in .env');
     process.exit(1);
@@ -39,16 +34,17 @@ client.on('raw', (packet) => {
   });
 */
 client.sessionStore = sessionStore;
-client.botCoordinator = createBotCoordinator(sessionStore);
+client.botCoordinator = createBotCoordinator(config.coordinatorConfig, sessionStore);
 
-const transcriptWorker = createTranscriptWorker({
-    sttBaseUrl,
+const transcriptWorker = getTranscriptWorker({
+    workerConfig: config.workerConfig,
     fetchImpl: fetch,
     fsImpl: fs,
     pathImpl: path,
 });
 
 client.sessionManager = createSessionManager({
+    managerConfig: config.managerConfig, 
     sessionStore,
     createReportGenerator,
     createSummaryGenerator,

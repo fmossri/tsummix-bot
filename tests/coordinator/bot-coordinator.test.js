@@ -44,6 +44,15 @@ afterAll(() => {
 
 const { createBotCoordinator } = require('../../coordinator/bot-coordinator.js');
 
+const DEFAULT_COORDINATOR_CONFIG = {
+	meetingTimeouts: {
+		explicitPauseMs: 30 * 60 * 1000,
+		pausedEmptyRoomMs: 15 * 60 * 1000,
+		emptyRoomMs: 5 * 60 * 1000,
+		uiTimeoutMs: 60 * 1000,
+	},
+};
+
 function createMockSessionStore(session = null) {
 	return {
 		getSessionById: jest.fn().mockReturnValue(session),
@@ -84,7 +93,7 @@ describe('Bot Coordinator', () => {
 	describe('startMeeting', () => {
 		it('replies with disclaimer and buttons, creates session in store with correct shape, returns true', async () => {
 			const sessionStore = createMockSessionStore();
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction();
 			// startMeeting awaits interaction.reply() then calls .fetch() on the result; must return object with fetch
 			interaction.reply.mockResolvedValue({
@@ -118,7 +127,7 @@ describe('Bot Coordinator', () => {
 	describe('closeMeeting', () => {
 		it('returns false when session does not exist (sessionState is null)', async () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: 'confirm-msg-id', delete: jest.fn().mockResolvedValue(undefined) }),
 			});
@@ -131,7 +140,7 @@ describe('Bot Coordinator', () => {
 		it('calls editReply with confirm message and stores confirm mapping when session exists', async () => {
 			const sessionState = { timeouts: { uiTimeoutId: null, pauseTimeoutId: null } };
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: 'confirm-123', delete: jest.fn().mockResolvedValue(undefined) }),
 			});
@@ -151,7 +160,7 @@ describe('Bot Coordinator', () => {
 	describe('reconnectParticipant', () => {
 		it('returns false when session is not found', () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = coordinator.reconnectParticipant('session-1', 'user-1');
 
@@ -164,7 +173,7 @@ describe('Bot Coordinator', () => {
 				originalInteraction: { client: { sessionManager: { chunkStream: jest.fn() } } },
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = coordinator.reconnectParticipant('session-1', 'user-1');
 
@@ -192,7 +201,7 @@ describe('Bot Coordinator', () => {
 				originalInteraction: { client: { sessionManager: { chunkStream: chunkStreamMock } } },
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = coordinator.reconnectParticipant('session-1', 'user-1');
 
@@ -217,7 +226,7 @@ describe('Bot Coordinator', () => {
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			await coordinator.pauseMeeting('session-1');
 
@@ -251,7 +260,7 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.resumeMeeting('session-1');
 
@@ -279,7 +288,7 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.resumeMeeting('session-1');
 			expect(result).toBe(false);
@@ -298,7 +307,7 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.resumeMeeting('session-1');
 
@@ -320,7 +329,7 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.resumeMeeting('session-1');
 			expect(result).toBe(false);
@@ -330,7 +339,7 @@ describe('Bot Coordinator', () => {
 	describe('handleButtonInteraction', () => {
 		it('calls deferUpdate and returns when no session for message', async () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({ message: { id: 'unknown-msg' } });
 
 			await coordinator.handleButtonInteraction(interaction);
@@ -353,7 +362,7 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			sessionStore.getSessionById.mockReturnValue(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456', displayName: 'Alice' },
@@ -376,7 +385,7 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456' },
@@ -398,7 +407,7 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456' },
@@ -421,7 +430,7 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456' },
@@ -455,7 +464,7 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore();
 			sessionStore.getSessionById.mockImplementation((id) => (id === sessionId ? sessionState : null));
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const closeInteraction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: confirmMessageId, delete: jest.fn().mockResolvedValue(undefined) }),
@@ -499,7 +508,7 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			sessionStore.getSessionById.mockImplementation((id) => (id === sessionId ? sessionState : null));
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const closeInteraction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: confirmMessageId, delete: jest.fn().mockResolvedValue(undefined) }),
 			});
@@ -529,7 +538,7 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				customId: 'unknown-button',
@@ -545,7 +554,7 @@ describe('Bot Coordinator', () => {
 	describe('autoCloseMeeting', () => {
 		it('returns false when session not found', async () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.autoCloseMeeting('session-1');
 
@@ -569,7 +578,7 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.autoCloseMeeting('session-1');
 
@@ -598,7 +607,7 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.autoCloseMeeting('session-1');
 
@@ -621,7 +630,7 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.autoCloseMeeting('session-1');
 
@@ -643,7 +652,7 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			sessionStore.getSessionById.mockReturnValueOnce(sessionState).mockReturnValueOnce(null);
-			const coordinator = createBotCoordinator(sessionStore);
+			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
 
 			const result = await coordinator.autoCloseMeeting('session-1');
 

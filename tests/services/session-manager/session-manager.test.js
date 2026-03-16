@@ -3,6 +3,7 @@ const { createSessionManager } = require('../../../services/session-manager/sess
 const TARGET_CHUNK_SECONDS = 30;
 const SAMPLE_RATE = 16000;
 const TARGET_BYTES = TARGET_CHUNK_SECONDS * SAMPLE_RATE * 2;
+const DEFAULT_MANAGER_CONFIG = { maxRetries: 3 };
 
 function createMockSessionStore(session = null) {
 	return {
@@ -49,6 +50,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			const result = await sessionManager.startSession('session-1');
@@ -66,6 +68,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			const result = await sessionManager.startSession('session-1');
@@ -86,6 +89,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			const result = await sessionManager.startSession('session-1');
@@ -102,6 +106,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker: createMockTranscriptWorker(),
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			const result = await sessionManager.closeSession('session-1');
@@ -119,6 +124,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(mockReportPath),
 				createSummaryGenerator: () => createMockSummaryGenerator(mockSummaryText),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -146,6 +152,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -165,6 +172,7 @@ describe('Session Manager', () => {
 				}),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -183,6 +191,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			const result = sessionManager.chunkStream('session-1', 'u1');
@@ -201,6 +210,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -235,6 +245,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -279,6 +290,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -319,6 +331,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -354,6 +367,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 			await sessionManager.startSession('session-1');
 			sessionManager.chunkStream('session-1', 'u1');
@@ -405,6 +419,7 @@ describe('Session Manager', () => {
 					createReportGenerator: () => createMockReportGenerator(),
 					createSummaryGenerator: () => createMockSummaryGenerator(),
 					transcriptWorker,
+					managerConfig: DEFAULT_MANAGER_CONFIG,
 				});
 
 				await sessionManager.startSession('session-1');
@@ -422,7 +437,7 @@ describe('Session Manager', () => {
 				}));
 			});
 
-			it('drops chunk and logs chunk_send_failed after MAX_SEND_RETRIES (permanent failure)', async () => {
+			it('drops chunk and logs chunk_send_failed after MAX_RETRIES (permanent failure)', async () => {
 				const logger = require('../../../services/logger/logger');
 				const errorSpy = jest.spyOn(logger, 'error');
 
@@ -452,6 +467,7 @@ describe('Session Manager', () => {
 					createReportGenerator: () => createMockReportGenerator(),
 					createSummaryGenerator: () => createMockSummaryGenerator(),
 					transcriptWorker,
+					managerConfig: DEFAULT_MANAGER_CONFIG,
 				});
 
 				await sessionManager.startSession('session-1');
@@ -504,6 +520,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			await sessionManager.startSession('session-1');
@@ -544,6 +561,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 			return { sessionManager, transcriptWorker, sessionStore };
 		}
@@ -556,6 +574,7 @@ describe('Session Manager', () => {
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
+				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
 			const result = await sessionManager.pauseSession('session-1');

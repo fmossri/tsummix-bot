@@ -3,14 +3,15 @@ const logger = require('../logger/logger');
 const appMetrics = require('../metrics/metrics');
 
 const COMPONENT = 'session-manager';
-const MAX_SEND_RETRIES = 3;
 
 function createSessionManager({
-	sessionStore,
+    managerConfig,
+    sessionStore,
 	createReportGenerator,
 	createSummaryGenerator,
-	transcriptWorker,
+	transcriptWorker
 }) {
+    const { maxRetries: MAX_RETRIES } = managerConfig;
     const sessionStates = new Map();
 
     function isWorkerHealthy() {
@@ -82,8 +83,8 @@ function createSessionManager({
 			} catch (error) {
                 chunk.sendRetryCount++;
 
-                if (chunk.sendRetryCount === MAX_SEND_RETRIES) {
-                    logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed after retries', {
+                if (chunk.sendRetryCount === MAX_RETRIES) {
+                    const context = {
                         sessionId,
                         transcriptId: sessionId,
                         chunkId: chunk?.chunkId,
@@ -91,7 +92,9 @@ function createSessionManager({
                         errorClass: 'EnqueueChunkFailed',
                         innerErrorClass: error.constructor?.name || 'Error',
                         message: error.message,
-                    });
+                    };
+                    if (error.statusCode != null) context.statusCode = error.statusCode;
+                    logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed after retries', context);
                     continue;
                 }
                 sessionState.chunksQueue.push(chunk);
@@ -304,12 +307,14 @@ function createSessionManager({
 			return true;
 		} catch (error) {
 			appMetrics.increment('session_start_failures_total');
-			logger.error(COMPONENT, 'session_start_failed', 'Failed to start session', {
+			const context = {
 				sessionId,
 				errorClass: 'StartSessionFailed',
 				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
-			});
+			};
+			if (error.statusCode != null) context.statusCode = error.statusCode;
+			logger.error(COMPONENT, 'session_start_failed', 'Failed to start session', context);
 			return false;
 		}
 	}
@@ -372,13 +377,15 @@ function createSessionManager({
 					: isNoTranscript
 						? 'EmptyTranscript'
 						: 'CloseSessionFailed';
-			logger.error(COMPONENT, 'session_close_failed', 'Close session failed', {
+			const closeContext = {
 				sessionId,
 				errorClass,
 				innerErrorClass: error.constructor?.name || 'Error',
 				stage,
 				message: error.message,
-			});
+			};
+			if (error.statusCode != null) closeContext.statusCode = error.statusCode;
+			logger.error(COMPONENT, 'session_close_failed', 'Close session failed', closeContext);
 			error.closeErrorClass = errorClass;
 			// Transcript already closed at report/summary stage; treat session as closed so later close attempts don't re-close transcript.
 			if (stage === 'report' || stage === 'summary') {
