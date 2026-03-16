@@ -1,22 +1,17 @@
 require('dotenv').config();
 
+const { workerConfig } = require('../../config/index.js');
 const { createTranscriptWorker } = require('./transcript-worker');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 
 const app = express();
-const { WORKER_PORT, STT_BASE_URL } = process.env;
-
-if (!WORKER_PORT || !STT_BASE_URL) {
-	console.error('Missing WORKER_PORT or STT_BASE_URL in .env');
-	process.exit(1);
-}
 
 app.use(express.json());
 
 const transcriptWorker = createTranscriptWorker({
-	sttBaseUrl: STT_BASE_URL,
+	workerConfig,
 	fetchImpl: fetch,
 	fsImpl: fs,
 	pathImpl: path,
@@ -24,9 +19,9 @@ const transcriptWorker = createTranscriptWorker({
 
 app.post('/start-transcript', async (req, res) => {
 	try {
-		const { transcriptId } = req.body;
+		const { transcriptId, meetingStartTimeMs } = req.body;
 		if (!transcriptId) return res.status(400).json({ error: 'Transcript ID is required' });
-		const transcriptPath = await transcriptWorker.startTranscript(transcriptId);
+		const transcriptPath = await transcriptWorker.startTranscript(transcriptId, meetingStartTimeMs);
 		res.json({ started: true, transcriptPath });
 	} catch (error) {
 		console.error('Error starting transcript:', error);
@@ -44,8 +39,8 @@ app.post('/enqueue-chunk', async (req, res) => {
 			chunk.audio = Buffer.from(chunk.audio, 'base64');
 		}
 
-		const result = await transcriptWorker.enqueueChunk(transcriptId, chunk);
-		res.json(result);
+		await transcriptWorker.enqueueChunk(transcriptId, chunk);
+		res.json({ok: true});
 	} catch (error) {
 		console.error('Error enqueuing chunk:', error);
 		res.status(500).json({ error: error.message });
@@ -54,19 +49,20 @@ app.post('/enqueue-chunk', async (req, res) => {
 
 app.post('/close-transcript', async (req, res) => {
 	try {
-		const { transcriptId, channelId, participantDisplayNames } = req.body;
+		const { transcriptId, channelId, participantDisplayNames, closure } = req.body;
 		if (!transcriptId) return res.status(400).json({ error: 'Transcript ID is required' });
-		const transcriptPath = await transcriptWorker.closeTranscript(transcriptId, {
+		await transcriptWorker.closeTranscript(transcriptId, {
 			channelId: channelId ?? undefined,
 			participantDisplayNames: participantDisplayNames ?? undefined,
+			closure: closure ?? undefined,
 		});
-		res.json({ transcriptPath });
+		res.json({ ok: true });
 	} catch (error) {
 		console.error('Error closing transcript:', error);
 		res.status(500).json({ error: error.message });
 	}
 });
 
-app.listen(WORKER_PORT, () => {
-	console.log(`Worker started on port ${WORKER_PORT}`);
+app.listen(workerConfig.workerPort, () => {
+	console.log(`Worker started on port ${workerConfig.workerPort}`);
 });
