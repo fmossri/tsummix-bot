@@ -41,13 +41,10 @@ function requireBaseUrl(name) {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         throw new Error(`${name} must be a valid URL`);
     }
-    if (url.port === '') {
-        throw new Error(`${name} must have a port`);
-    }
     return url.origin;
 }
 
-function validateDiscordToken(token) {
+function requireDiscordToken(token) {
     if (!token) {
         throw new Error('DISCORD_TOKEN must be set in .env');
     }
@@ -56,14 +53,21 @@ function validateDiscordToken(token) {
     }
     const tokenRegex = /^[MNOR][\w-]{23,25}\.[\w-]{6}\.[\w-]{27,39}$/;
     if (!tokenRegex.test(token)) {
-        throw new Error('Invalid DISCORD_TOKEN format');
+        console.warn('Possible invalid DISCORD_TOKEN');
     }
     return token;
+}
+function validateWorkerUseLocal() {
+    const useLocal = getBoolean('WORKER_USE_LOCAL', true);
+    if (!useLocal) {
+        requireBaseUrl('WORKER_BASE_URL');
+    }
+    return useLocal;
 }
 
 module.exports = {
     //Client config
-    discordToken: validateDiscordToken(process.env.DISCORD_TOKEN),
+    discordToken: requireDiscordToken(process.env.DISCORD_TOKEN),
     //Coordinator config
     coordinatorConfig: {
         meetingTimeouts: {
@@ -80,7 +84,7 @@ module.exports = {
     //Manager config
     managerConfig: {
         //Base URL for the worker HTTP server
-        workerBaseUrl: !getBoolean('WORKER_USE_LOCAL', true) ? requireBaseUrl('WORKER_BASE_URL') : null,
+        workerBaseUrl: !getBoolean('WORKER_USE_LOCAL', true) ? requireBaseUrl('WORKER_BASE_URL') : 'http://localhost:3000',
         //Max retries for enqueuing chunks to the worker
         maxRetries: MANAGER_MAX_RETRIES,
         //Timeout for the LLM to generate a summary
@@ -89,7 +93,7 @@ module.exports = {
     //Worker config
     workerConfig: {
         //Whether the worker runs in-process or is called over HTTP
-        localWorker: getBoolean('WORKER_USE_LOCAL', true),
+        localWorker: validateWorkerUseLocal(),
         //Port for the worker HTTP server
         workerPort: getInt('WORKER_PORT', 3000),
         //Base URL for the STT wrapper
