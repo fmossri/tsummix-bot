@@ -1,6 +1,6 @@
 {
   "name": "tsummix",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "",
   "main": "index.js",
   "bin": {
@@ -14,6 +14,7 @@
     "debug:voice": "DEBUG=@discordjs/voice:* node scripts/tsummix.js run bot"
   },
   "jest": {
+    "globalSetup": "<rootDir>/tests/jest.globalSetup.js",
     "setupFiles": [
       "<rootDir>/tests/jest.setup.js"
     ]

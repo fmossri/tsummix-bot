@@ -1,6 +1,6 @@
 # Tsummix
 
-**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Transcript and report timestamps reflect real (wall-clock) meeting time. Test suite in place (unit + integration).
+**Status:** Early (v0.3). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Transcript and report timestamps reflect real (wall-clock) meeting time. Service-to-service authentication (Bot ↔ Worker, Worker ↔ Wrapper) in place for non-local deployments. Test suite in place (unit + integration).
 
 A Discord bot that implements STT and summarization capabilities.
 
@@ -10,7 +10,7 @@ A Discord bot that implements STT and summarization capabilities.
 
 ### Discord bot (Node.js) — session and interface
 
-- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel.
+- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active meeting per server (guild) is enforced; starting a second is rejected with a clear message.
 - **`/pause`** — Pause recording: stop audio capture and sending chunks. Worker drains existing chunks and idles. Transcript state preserved.
 - **`/resume`** — Resume recording: re-subscribe to in-channel participants and resume chunk flow.
 - **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
@@ -110,12 +110,14 @@ After participants accept a disclaimer, the bot joins the voice channel and subs
 
 Copy `.env-example` to `.env` and set:
 
-| Variable                 | Description |
-|--------------------------|-------------|
-| `DISCORD_TOKEN`          | Bot token (Developer Portal → Bot → Reset Token) |
-| `APP_ID`                 | Application ID (Developer Portal → General Information) |
-| `SERVER_ID`              | Optional. If set, `deploy-commands.js` registers slash commands in this guild only (instant). If unset, commands are registered globally (all servers; propagation can take up to 1 hour). |
-| `STT_MODEL_ID`           | Model to load: built-in size (e.g. `medium`), HF repo id (e.g. `dwhoelz/whisper-medium-pt-ct2`), or local path to a CTranslate2 model dir |
+| Variable                   | Description |
+|----------------------------|-------------|
+| `DISCORD_AUTH_TOKEN`       | Bot token (Developer Portal → Bot → Reset Token) |
+| `APP_ID`                   | Application ID (Developer Portal → General Information) |
+| `SERVER_ID`                | Optional. If set, `deploy-commands.js` registers slash commands in this guild only (instant). If unset, commands are registered globally (all servers; propagation can take up to 1 hour). |
+| `WORKER_AUTH_TOKEN`        | Shared secret for Bot ↔ Worker auth. Required when `WORKER_USE_LOCAL=false`. Must match in both Bot and Worker containers. |
+| `STT_AUTH_TOKEN`           | Shared secret for Worker ↔ STT Wrapper auth. Required in all non-local deployments. Must match in both Worker and Wrapper containers. |
+| `STT_MODEL_ID`             | Model to load: built-in size (e.g. `medium`), HF repo id (e.g. `dwhoelz/whisper-medium-pt-ct2`), or local path to a CTranslate2 model dir |
 | `STT_DOWNLOAD_PATH`      | Where to download/cache models when using a size or HF repo (default `.models/`). Ignored when `STT_MODEL_ID` is a local path. First run may download. |
 | `STT_USE_LOCAL`          | Use only cached models, no network. Set to `true` after first download or for offline. |
 | `STT_DEVICE`             | Device for inference: `cpu`, `cuda`, or `auto`. |
