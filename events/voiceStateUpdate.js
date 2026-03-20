@@ -1,5 +1,5 @@
 const { Events } = require('discord.js');
-const { meetingTimeouts } = require('../config/index.js');
+const { controllerConfig: { meetingTimeouts } } = require('../config/index.js');
 
 module.exports = {
 	name: Events.VoiceStateUpdate,
