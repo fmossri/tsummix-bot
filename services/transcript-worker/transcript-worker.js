@@ -20,19 +20,7 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
         return headers;
     }
 
-	async function waitForSttReady() {
-		const deadline = Date.now() + workerTimeouts.sttReadyTimeoutMs;
-		const healthUrl = sttBaseUrl.replace(/\/$/, '') + '/health';
-		while (Date.now() < deadline) {
-			try {
-				const res = await fetchImpl(healthUrl, { headers: getSttHeaders(sttAuthToken) });
-				const body = await res.json();
-				if (body && body.ready === true) return;
-			} catch (_) { /* ignore */ }
-			await new Promise((r) => setTimeout(r, workerTimeouts.sttReadyPollMs));
-		}
-		throw new Error(`STT wrapper not ready within ${workerTimeouts.sttReadyTimeoutMs}ms`);
-	}
+
 
 	function getTotalQueueDepth() {
 		let sum = 0;
@@ -302,6 +290,25 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 			});
 	}
 
+    async function waitForSttReady() {
+		const deadline = Date.now() + workerTimeouts.sttReadyTimeoutMs;
+		const healthUrl = sttBaseUrl.replace(/\/$/, '') + '/health';
+		while (Date.now() < deadline) {
+			try {
+				const res = await fetchImpl(healthUrl, { 
+                    headers: getSttHeaders(sttAuthToken),
+                    signal: AbortSignal.timeout(1000),
+                });
+                if (res.status === 200) {
+                    const body = await res.json();
+                    if (body && body.ready === true) return;
+                }
+			} catch (_) { /* ignore */ }
+			await new Promise((r) => setTimeout(r, workerTimeouts.sttReadyPollMs));
+		}
+		throw new Error(`STT wrapper not ready within ${workerTimeouts.sttReadyTimeoutMs}ms`);
+	}
+
 	async function processNextChunk(transcriptId) {
 		if (!transcriptsMap.has(transcriptId)) {
 			throw new Error('Invariant: transcript not found in processNextChunk');
@@ -312,14 +319,11 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 		return;
 		}
 		transcript.inFlight = true;
-        try {
-			if (!sttReadyWaited) {
-				await waitForSttReady();
-				sttReadyWaited = true;
-			}
-			const postUrl = sttBaseUrl + '/transcribe';
+        const postUrl = sttBaseUrl + '/transcribe';
 
+        try {
 			while (transcript.chunksQueue.length > 0) {
+                await waitForSttReady();
 				const chunk = transcript.chunksQueue.shift();
 				appMetrics.set('worker_queue_depth', getTotalQueueDepth());
 				transcript.chunksBucket.set(chunk.chunkId, chunk);
@@ -379,6 +383,11 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 							authError.errorClass = 'SttUnauthorized';
 							throw authError;
 						}
+                        if (response.status === 429) {
+                            logger.warn(COMPONENT, 'stt_response_failed', 'Hit 429, re-queueing', { chunkId: chunk.chunkId });
+                            transcript.chunksQueue.unshift(chunk); // Put it back at the FRONT
+                            continue; // The next iteration will hit waitForSttReady() and pause
+                        }
 
 						// Non-auth errors: keep existing retry behavior.
 						chunk.retryCount++;

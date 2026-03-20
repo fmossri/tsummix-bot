@@ -18,7 +18,7 @@ const DEFAULT_STT_TIMEOUT_MS = 5000;
 //Timeout for the STT wrapper to be ready
 const DEFAULT_STT_READY_TIMEOUT_MS = 120000;
 //Time interval between each GET /health attempt while waiting for the STT wrapper to be ready
-const DEFAULT_STT_READY_POLL_MS = 2000;
+const DEFAULT_STT_READY_POLL_MS = 500;
 
 function getNonZeroInt(name, fallback) {
     const raw = process.env[name];
