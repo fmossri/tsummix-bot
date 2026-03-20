@@ -383,14 +383,24 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 							authError.errorClass = 'SttUnauthorized';
 							throw authError;
 						}
-                        if (response.status === 429) {
-                            logger.warn(COMPONENT, 'stt_response_failed', 'Hit 429, re-queueing', { chunkId: chunk.chunkId });
-                            transcript.chunksQueue.unshift(chunk); // Put it back at the FRONT
-                            continue; // The next iteration will hit waitForSttReady() and pause
+                        chunk.retryCount++;
+                        if (status === 429) {
+                            if (chunk.retryCount < MAX_RETRIES) {
+                                // Retry later at the end so one throttled chunk doesn't block newer chunks.
+                                transcript.chunksQueue.push(chunk);
+                                transcript.chunksBucket.delete(chunk.chunkId);
+                                logger.warn(COMPONENT, 'stt_response_failed', 'STT returned 429; re-queued to tail', {
+                                    transcriptId,
+                                    chunkId: chunk.chunkId,
+                                    statusCode: 429,
+                                    errorClass: 'SttNon200',
+                                    retryCount: chunk.retryCount,
+                                });
+                                continue;
+                            }
                         }
 
-						// Non-auth errors: keep existing retry behavior.
-						chunk.retryCount++;
+                        // Non-auth errors: keep existing retry behavior.
 						if (chunk.retryCount < MAX_RETRIES) {
 							// Retry later: requeue to the end so we don't block other chunks.
 							transcript.chunksQueue.push(chunk);
@@ -402,11 +412,14 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 						const errLatencyMs = Math.max(0, Date.now() - sttStartMs);
 						appMetrics.observe('stt_latency_ms', errLatencyMs);
 						if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
+                        const failureMessage = status === 429
+                            ? 'Too Many Requests'
+                            : (response.statusText || 'STT request failed');
 						recordChunkFailure(transcriptId, chunk, {
 							statusCode: status,
 							retryCount: chunk.retryCount,
 							errorClass: 'SttNon200',
-							message: response.statusText || 'STT request failed',
+							message: failureMessage,
 							queueWaitMs,
 						});
 						logger.error(COMPONENT, 'stt_response_failed', 'STT response non-200 after retries', {

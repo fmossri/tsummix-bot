@@ -279,6 +279,39 @@ describe('enqueueChunk', () => {
             expect.stringContaining('transcribed after retry')
         );
     });
+
+    it('requeues 429 chunk to tail so newer chunk is processed first', async () => {
+        const transcribeOrder = [];
+        let chunk1Attempts = 0;
+        mockFetch.mockImplementation((url, options) => {
+            if (String(url).endsWith('/health')) {
+                return Promise.resolve({ status: 200, json: () => Promise.resolve({ ready: true }) });
+            }
+            const body = JSON.parse(options.body);
+            transcribeOrder.push(body.chunkId);
+            if (body.chunkId === 1) {
+                chunk1Attempts++;
+                if (chunk1Attempts === 1) {
+                    return Promise.resolve({ status: 429, statusText: 'Too Many Requests', json: () => Promise.resolve({}) });
+                }
+            }
+            return Promise.resolve({
+                status: 200,
+                json: () => Promise.resolve({
+                    chunkId: body.chunkId,
+                    segments: [{ startMs: 0, endMs: 1000, text: `ok-${body.chunkId}` }]
+                })
+            });
+        });
+
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
+        await worker.closeTranscript('test-transcript');
+
+        // If 429 is requeued to tail, expected order is: first attempt on 1, then 2, then retry 1.
+        expect(transcribeOrder).toEqual([1, 2, 1]);
+    });
 });
 
 describe('closeTranscript', () => {
