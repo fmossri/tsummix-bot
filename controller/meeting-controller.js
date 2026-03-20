@@ -314,8 +314,40 @@ function createMeetingController(controllerConfig, sessionStore) {
         }
     }
 
+    async function getSessionTextChannel(sessionState) {
+        const client = sessionState?.originalInteraction?.client;
+        if (!client) {
+            throw new Error('SessionClientUnavailable');
+        }
+        if (!sessionState?.textChannelId) {
+            throw new Error('SessionTextChannelMissing');
+        }
+        const textChannel = await client.channels.fetch(sessionState.textChannelId);
+        if (!textChannel?.isTextBased?.() || typeof textChannel.send !== 'function') {
+            throw new Error('SessionTextChannelInvalid');
+        }
+        return textChannel;
+    }
+
+    async function sendSessionChannelMessage(sessionState, content) {
+        try {
+            const textChannel = await getSessionTextChannel(sessionState);
+            await textChannel.send({ content });
+            return { ok: true, error: null };
+        } catch (error) {
+            return { ok: false, error };
+        }
+    }
+
     async function executeClose(sessionId, autoClose = false) {
         const sessionState = sessionStore.getSessionById(sessionId);
+        if (!sessionState) {
+            logger.error(COMPONENT, 'session_close_failed', 'Session not found', {
+                sessionId,
+                errorClass: 'SessionNotFound',
+            });
+            return false;
+        }
         const disabledAccept = new ButtonBuilder()
             .setCustomId('disclaimer-accept')
             .setLabel('Accept')
@@ -352,16 +384,23 @@ function createMeetingController(controllerConfig, sessionStore) {
             const closeMessage = autoClose ?
             'Meeting closed due to inactivity. The partial report is saved.' :
             `The meeting is over. Thank you for participating. \n\n**Summary:**\n${summary}`;
-            await sessionState.originalInteraction.followUp({
-                content: closeMessage,
-            });
+            const sendResult = await sendSessionChannelMessage(sessionState, closeMessage);
+            if (!sendResult.ok) {
+                logger.error(COMPONENT, 'session_close_failed', 'Failed to send close message to text channel', {
+                    sessionId,
+                    textChannelId: sessionState?.textChannelId ?? null,
+                    errorClass: 'CloseMeetingFailed',
+                    innerErrorClass: sendResult.error?.constructor?.name || 'Error',
+                    message: sendResult.error?.message,
+                });
+                return false;
+            }
 
             appMetrics.increment('meetings_closed_total');
             logger.info(COMPONENT, 'session_closed', 'Meeting closed', {
                 sessionId,
                 autoClose,
             });
-            sessionStore.deleteSession(sessionId);
             return true;
         } catch (error) {
             const closeErrorClass = error.closeErrorClass || 'CloseSessionFailed';
@@ -372,11 +411,32 @@ function createMeetingController(controllerConfig, sessionStore) {
                 message: error.message,
             });
             const failureMessage = getCloseFailureMessage(error, closeErrorClass);
-            await sessionState.originalInteraction.followUp({ content: failureMessage }).catch(() => {});
-            sessionStore.deleteSession(sessionId);
+            const failureSendResult = await sendSessionChannelMessage(sessionState, failureMessage);
+            if (!failureSendResult.ok) {
+                logger.error(COMPONENT, 'session_close_failed', 'Failed to send failure message to text channel', {
+                    sessionId,
+                    textChannelId: sessionState?.textChannelId ?? null,
+                    errorClass: 'CloseMeetingFailed',
+                    innerErrorClass: failureSendResult.error?.constructor?.name || 'Error',
+                    message: failureSendResult.error?.message,
+                });
+            }
             return false;
         } finally {
-            await sessionState.originalInteraction.editReply({ components: [disabledRow] }).catch(() => {});
+            try {
+                sessionStore.deleteSession(sessionId);
+                const textChannel = await getSessionTextChannel(sessionState);
+                const message = await textChannel.messages.fetch(sessionId);
+                await message.edit({ components: [disabledRow] });
+            } catch (editError) {
+                logger.error(COMPONENT, 'session_close_failed', 'Failed to disable disclaimer buttons', {
+                    sessionId,
+                    textChannelId: sessionState?.textChannelId ?? null,
+                    errorClass: 'CloseMeetingFailed',
+                    innerErrorClass: editError?.constructor?.name || 'Error',
+                    message: editError?.message,
+                });
+            }
         }
     }
 
@@ -458,8 +518,11 @@ function createMeetingController(controllerConfig, sessionStore) {
 
     async function startMeeting(interaction) {
         try {
+            const originalInteraction = interaction;
+            const guildId = interaction.guild?.id ?? null;
+            const textChannelId = interaction.channelId ?? null;
             const voiceChannel = interaction.member.voice.channel;
-
+            const voiceChannelId = voiceChannel?.id ?? null;
             const interactionResponse = await sendMeetingStartMessage(interaction);
 
             const replyMessageObject = await interactionResponse.fetch();
@@ -473,9 +536,10 @@ function createMeetingController(controllerConfig, sessionStore) {
                 dmIds: [],
                 initialMemberIds: Array.from(voiceChannel.members?.keys?.() ?? []),
                 participantStates: new Map(),
-                guildId: interaction.guild?.id ?? null,
-                voiceChannelId: voiceChannel.id,
-                originalInteraction: interaction,
+                guildId,
+                textChannelId,
+                voiceChannelId,
+                originalInteraction,
                 timeouts:{uiTimeoutId: null, pauseTimeoutId: null},
             };
             const uiTimeoutId = setTimeout(async () => {
@@ -508,15 +572,17 @@ function createMeetingController(controllerConfig, sessionStore) {
             appMetrics.increment('meetings_started_total');
             logger.info(COMPONENT, 'session_started', 'Meeting started', {
                 sessionId,
-                guildId: interaction.guild?.id ?? null,
-                channelId: voiceChannel?.id ?? null,
+                guildId,
+                textChannelId,
+                voiceChannelId,
                 initiator: interaction.user?.id ?? null,
             });
             return true;
         } catch (error) {
             logger.error(COMPONENT, 'session_start_failed', 'Error starting meeting', {
-                guildId: interaction.guild?.id ?? null,
-                channelId: voiceChannel?.id ?? null,
+                guildId,
+                textChannelId,
+                voiceChannelId,
                 errorClass: 'StartMeetingFailed',
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
@@ -545,9 +611,19 @@ function createMeetingController(controllerConfig, sessionStore) {
                     sessionId,
                     errorClass: 'PauseSessionFailed',
                 });
-                await sessionState.originalInteraction.followUp({
-                    content: 'Failed to pause the meeting recording; recording is still active.',
-                }).catch(() => {});
+                const pauseSendResult = await sendSessionChannelMessage(
+                    sessionState,
+                    'Failed to pause the meeting recording; recording is still active.',
+                );
+                if (!pauseSendResult.ok) {
+                    logger.error(COMPONENT, 'session_pause_failed', 'Failed to send pause failure message to text channel', {
+                        sessionId,
+                        textChannelId: sessionState?.textChannelId ?? null,
+                        errorClass: 'PauseSessionFailed',
+                        innerErrorClass: pauseSendResult.error?.constructor?.name || 'Error',
+                        message: pauseSendResult.error?.message,
+                    });
+                }
                 return false;
             }
             logger.info(COMPONENT, 'session_paused', 'Recording paused', {
@@ -567,9 +643,19 @@ function createMeetingController(controllerConfig, sessionStore) {
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
-            await sessionState.originalInteraction.followUp({
-                content: 'Failed to pause the meeting recording; recording is still active.',
-            }).catch(() => {});
+            const pauseSendResult = await sendSessionChannelMessage(
+                sessionState,
+                'Failed to pause the meeting recording; recording is still active.',
+            );
+            if (!pauseSendResult.ok) {
+                logger.error(COMPONENT, 'session_pause_failed', 'Failed to send pause failure message to text channel', {
+                    sessionId,
+                    textChannelId: sessionState?.textChannelId ?? null,
+                    errorClass: 'PauseSessionFailed',
+                    innerErrorClass: pauseSendResult.error?.constructor?.name || 'Error',
+                    message: pauseSendResult.error?.message,
+                });
+            }
             return false;
         }
     }
@@ -590,9 +676,19 @@ function createMeetingController(controllerConfig, sessionStore) {
                         sessionId,
                         errorClass: 'ConnectFailed',
                     });
-                    await sessionState.originalInteraction.followUp({
-                        content: 'Failed to resume the meeting recording; the meeting remains paused.',
-                    }).catch(() => {});
+                    const resumeSendResult = await sendSessionChannelMessage(
+                        sessionState,
+                        'Failed to resume the meeting recording; the meeting remains paused.',
+                    );
+                    if (!resumeSendResult.ok) {
+                        logger.error(COMPONENT, 'session_resume_failed', 'Failed to send resume failure message to text channel', {
+                            sessionId,
+                            textChannelId: sessionState?.textChannelId ?? null,
+                            errorClass: 'ResumeSessionFailed',
+                            innerErrorClass: resumeSendResult.error?.constructor?.name || 'Error',
+                            message: resumeSendResult.error?.message,
+                        });
+                    }
                     return false;
                 }
             }
@@ -607,14 +703,24 @@ function createMeetingController(controllerConfig, sessionStore) {
                     voiceChannelId: sessionState.voiceChannelId,
                     errorClass: 'VoiceChannelNotFound',
                 });
-                await sessionState.originalInteraction.followUp({
-                    content: 'Failed to resume the meeting recording; the meeting remains paused.',
-                }).catch(() => {});
+                const resumeSendResult = await sendSessionChannelMessage(
+                    sessionState,
+                    'Failed to resume the meeting recording; the meeting remains paused.',
+                );
+                if (!resumeSendResult.ok) {
+                    logger.error(COMPONENT, 'session_resume_failed', 'Failed to send resume failure message to text channel', {
+                        sessionId,
+                        textChannelId: sessionState?.textChannelId ?? null,
+                        errorClass: 'ResumeSessionFailed',
+                        innerErrorClass: resumeSendResult.error?.constructor?.name || 'Error',
+                        message: resumeSendResult.error?.message,
+                    });
+                }
                 return false;
             }
             sessionState.paused = false;
             let anyReconnectFailed = false;
-            for (const member of voiceChannel.members) {
+            for (const [_, member] of voiceChannel.members) {
                 if (sessionState.participantIds.includes(member.user.id)) {
                     if (!reconnectParticipant(sessionId, member.user.id)) {
                         anyReconnectFailed = true;
@@ -626,15 +732,32 @@ function createMeetingController(controllerConfig, sessionStore) {
                     sessionId,
                     errorClass: 'ResumeSessionFailed',
                 });
-                await sessionState.originalInteraction.followUp({
-                    content: 'Failed to resume the meeting recording; the meeting remains paused.',
-                }).catch(() => {});
+                const resumeSendResult = await sendSessionChannelMessage(
+                    sessionState,
+                    'Failed to resume the meeting recording; the meeting remains paused.',
+                );
+                if (!resumeSendResult.ok) {
+                    logger.error(COMPONENT, 'session_resume_failed', 'Failed to send resume failure message to text channel', {
+                        sessionId,
+                        textChannelId: sessionState?.textChannelId ?? null,
+                        errorClass: 'ResumeSessionFailed',
+                        innerErrorClass: resumeSendResult.error?.constructor?.name || 'Error',
+                        message: resumeSendResult.error?.message,
+                    });
+                }
                 return false;
             }
             logger.info(COMPONENT, 'session_resumed', 'Recording resumed', { sessionId });
-            await sessionState.originalInteraction.followUp({
-                content: 'Meeting recording resumed.',
-            });
+            const resumeSuccessSendResult = await sendSessionChannelMessage(sessionState, 'Meeting recording resumed.');
+            if (!resumeSuccessSendResult.ok) {
+                logger.error(COMPONENT, 'session_resume_failed', 'Failed to send resume success message to text channel', {
+                    sessionId,
+                    textChannelId: sessionState?.textChannelId ?? null,
+                    errorClass: 'ResumeSessionFailed',
+                    innerErrorClass: resumeSuccessSendResult.error?.constructor?.name || 'Error',
+                    message: resumeSuccessSendResult.error?.message,
+                });
+            }
             return true;
         }
         catch (error) {
@@ -644,9 +767,19 @@ function createMeetingController(controllerConfig, sessionStore) {
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
-            await sessionState.originalInteraction.followUp({
-                content: 'Failed to resume the meeting recording; the meeting remains paused.',
-            }).catch(() => {});
+            const resumeSendResult = await sendSessionChannelMessage(
+                sessionState,
+                'Failed to resume the meeting recording; the meeting remains paused.',
+            );
+            if (!resumeSendResult.ok) {
+                logger.error(COMPONENT, 'session_resume_failed', 'Failed to send resume failure message to text channel', {
+                    sessionId,
+                    textChannelId: sessionState?.textChannelId ?? null,
+                    errorClass: 'ResumeSessionFailed',
+                    innerErrorClass: resumeSendResult.error?.constructor?.name || 'Error',
+                    message: resumeSendResult.error?.message,
+                });
+            }
             return false;
         }
     }

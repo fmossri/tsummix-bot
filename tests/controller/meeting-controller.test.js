@@ -61,14 +61,32 @@ function createMockSessionStore(session = null) {
 	};
 }
 
+function createMockTextChannel() {
+	const messageEditMock = jest.fn().mockResolvedValue(undefined);
+	const messageFetchMock = jest.fn().mockResolvedValue({ edit: messageEditMock });
+	const sendMock = jest.fn().mockResolvedValue(undefined);
+	return {
+		sendMock,
+		messageFetchMock,
+		messageEditMock,
+		channel: {
+			isTextBased: jest.fn().mockReturnValue(true),
+			send: sendMock,
+			messages: { fetch: messageFetchMock },
+		},
+	};
+}
+
 function createMockInteraction(overrides = {}) {
 	const replyPayload = {
 		fetch: jest.fn().mockResolvedValue({ id: 'reply-msg-id' }),
 	};
+	const { channel: textChannel } = createMockTextChannel();
 	return {
 		member: { voice: { channel: { id: 'voice-123' } } },
 		user: { id: 'user-456', displayName: 'TestUser' },
 		message: { id: 'msg-789' },
+		channelId: 'text-123',
 		reply: jest.fn().mockResolvedValue(replyPayload),
 		followUp: jest.fn().mockResolvedValue(undefined),
 		deferUpdate: jest.fn().mockResolvedValue(undefined),
@@ -78,6 +96,7 @@ function createMockInteraction(overrides = {}) {
 		replied: false,
 		deferred: false,
 		client: {
+			channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
 			sessionManager: {
 				startSession: jest.fn().mockResolvedValue(true),
 				chunkStream: jest.fn(),
@@ -214,14 +233,19 @@ describe('Meeting Controller', () => {
 		it('sets sessionState.paused and pauseTimeoutId when session exists', async () => {
 			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Summary.' });
 			const pauseSessionMock = jest.fn().mockResolvedValue(true);
+			const { channel: textChannel } = createMockTextChannel();
 			const sessionState = {
 				participantIds: ['user-1'],
 				voiceConnection: { destroy: jest.fn(), receiver: { subscribe: mockReceiverSubscribe } },
 				participantStates: new Map([['user-1', { subscription: null, pcmStream: null }]]),
+				textChannelId: 'text-123',
 				originalInteraction: {
 					followUp: jest.fn().mockResolvedValue(undefined),
 					editReply: jest.fn().mockResolvedValue(undefined),
-					client: { sessionManager: { closeSession: closeSessionMock, pauseSession: pauseSessionMock } },
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
+						sessionManager: { closeSession: closeSessionMock, pauseSession: pauseSessionMock },
+					},
 				},
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 			};
@@ -238,25 +262,26 @@ describe('Meeting Controller', () => {
 	});
 
 	describe('resumeMeeting', () => {
-		it('connects, fetches channel, reconnects participants, sets paused false, followUp "Meeting recording resumed.", returns true', async () => {
-			const followUpMock = jest.fn().mockResolvedValue(undefined);
+		it('connects, fetches channel, reconnects participants, sets paused false, sends "Meeting recording resumed.", returns true', async () => {
+			const { channel: textChannel, sendMock } = createMockTextChannel();
 			const voiceChannel = {
-				members: [
-					{ user: { id: 'user-1' } },
-				],
+				members: new Map([['user-1', { user: { id: 'user-1' } }]]),
 			};
 			const sessionState = {
 				participantIds: ['user-1'],
 				voiceChannelId: 'voice-123',
 				voiceConnection: { receiver: { subscribe: mockReceiverSubscribe } },
+				textChannelId: 'text-123',
 				participantStates: new Map([
 					['user-1', { subscription: null, pcmStream: null, displayName: 'User1', chunkerState: {} }],
 				]),
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue(voiceChannel) } },
-					client: { sessionManager: { chunkStream: jest.fn() } },
-					followUp: followUpMock,
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
+						sessionManager: { chunkStream: jest.fn() },
+					},
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
@@ -266,7 +291,7 @@ describe('Meeting Controller', () => {
 
 			expect(result).toBe(true);
 			expect(sessionState.paused).toBe(false);
-			expect(followUpMock).toHaveBeenCalledWith({
+			expect(sendMock).toHaveBeenCalledWith({
 				content: 'Meeting recording resumed.',
 			});
 			expect(sessionState.originalInteraction.client.sessionManager.chunkStream).toHaveBeenCalledWith('session-1', 'user-1');
@@ -280,10 +305,12 @@ describe('Meeting Controller', () => {
 				participantIds: [],
 				voiceChannelId: 'voice-123',
 				voiceConnection: null,
+				textChannelId: 'text-123',
 				participantStates: new Map(),
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue({ members: [] }) } },
+					client: { channels: { fetch: jest.fn().mockResolvedValue(createMockTextChannel().channel) } },
 					followUp: jest.fn().mockResolvedValue(undefined),
 				},
 			};
@@ -299,10 +326,12 @@ describe('Meeting Controller', () => {
 				participantIds: [],
 				voiceChannelId: 'voice-123',
 				voiceConnection: { receiver: { subscribe: mockReceiverSubscribe } },
+				textChannelId: 'text-123',
 				participantStates: new Map(),
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue(null) } },
+					client: { channels: { fetch: jest.fn().mockResolvedValue(createMockTextChannel().channel) } },
 					followUp: jest.fn().mockResolvedValue(undefined),
 				},
 			};
@@ -314,25 +343,33 @@ describe('Meeting Controller', () => {
 			expect(result).toBe(false);
 		});
 
-		it('returns false when followUp rejects', async () => {
+		it('returns true even when resume success message fails to send', async () => {
+			const brokenChannel = {
+				isTextBased: jest.fn().mockReturnValue(true),
+				send: jest.fn().mockRejectedValue(new Error('send failed')),
+				messages: { fetch: jest.fn().mockResolvedValue({ edit: jest.fn().mockResolvedValue(undefined) }) },
+			};
 			const voiceChannel = { members: [] };
 			const sessionState = {
 				participantIds: [],
 				voiceChannelId: 'voice-123',
 				voiceConnection: { receiver: { subscribe: mockReceiverSubscribe } },
+				textChannelId: 'text-123',
 				participantStates: new Map(),
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue(voiceChannel) } },
-					client: { sessionManager: { chunkStream: jest.fn() } },
-					followUp: jest.fn().mockRejectedValue(new Error('followUp failed')),
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(brokenChannel) },
+						sessionManager: { chunkStream: jest.fn() },
+					},
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
 			const result = await controller.resumeMeeting('session-1');
-			expect(result).toBe(false);
+			expect(result).toBe(true);
 		});
 	});
 
@@ -448,18 +485,21 @@ describe('Meeting Controller', () => {
 		it('calls closeSession, followUp with summary, and deleteSession on close-meeting-confirm success', async () => {
 			const sessionId = 'session-1';
 			const confirmMessageId = 'confirm-msg-123';
-			const followUpMock = jest.fn().mockResolvedValue(undefined);
+			const { channel: textChannel, sendMock, messageEditMock } = createMockTextChannel();
 			const editReplyMock = jest.fn().mockResolvedValue(undefined);
 			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/path/report.md', summary: 'Meeting summary.' });
 			const sessionState = {
 				participantIds: [],
+				textChannelId: 'text-123',
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				voiceConnection: { destroy: jest.fn() },
 				participantStates: new Map(),
 				originalInteraction: {
-					followUp: followUpMock,
 					editReply: editReplyMock,
-					client: { sessionManager: { closeSession: closeSessionMock } },
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
+						sessionManager: { closeSession: closeSessionMock },
+					},
 				},
 			};
 			const sessionStore = createMockSessionStore();
@@ -483,10 +523,10 @@ describe('Meeting Controller', () => {
 				sessionId,
 				expect.objectContaining({ autoClose: false, closeReason: 'manual', closedAtMs: expect.any(Number) })
 			);
-			expect(followUpMock).toHaveBeenCalledWith({
+			expect(sendMock).toHaveBeenCalledWith({
 				content: expect.stringContaining('Meeting summary.'),
 			});
-			expect(editReplyMock).toHaveBeenCalledWith(expect.objectContaining({ components: expect.any(Array) }));
+			expect(messageEditMock).toHaveBeenCalledWith(expect.objectContaining({ components: expect.any(Array) }));
 			expect(sessionStore.deleteSession).toHaveBeenCalledWith(sessionId);
 		});
 
@@ -495,15 +535,20 @@ describe('Meeting Controller', () => {
 			const confirmMessageId = 'confirm-msg-456';
 			const followUpMock = jest.fn().mockResolvedValue(undefined);
 			const closeSessionMock = jest.fn().mockRejectedValue(new Error('close failed'));
+			const { channel: textChannel } = createMockTextChannel();
 			const sessionState = {
 				participantIds: [],
+				textChannelId: 'text-123',
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				voiceConnection: { destroy: jest.fn() },
 				participantStates: new Map(),
 				originalInteraction: {
 					followUp: followUpMock,
 					editReply: jest.fn().mockResolvedValue(undefined),
-					client: { sessionManager: { closeSession: closeSessionMock } },
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
+						sessionManager: { closeSession: closeSessionMock },
+					},
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
@@ -563,18 +608,19 @@ describe('Meeting Controller', () => {
 		});
 
 		it('returns true and calls executeClose with autoClose when session exists and close succeeds', async () => {
-			const followUpMock = jest.fn().mockResolvedValue(undefined);
-			const editReplyMock = jest.fn().mockResolvedValue(undefined);
+			const { channel: textChannel, sendMock } = createMockTextChannel();
 			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Auto-close summary.' });
 			const sessionState = {
 				participantIds: [],
+				textChannelId: 'text-123',
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				voiceConnection: { destroy: jest.fn() },
 				participantStates: new Map(),
 				originalInteraction: {
-					followUp: followUpMock,
-					editReply: editReplyMock,
-					client: { sessionManager: { closeSession: closeSessionMock } },
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
+						sessionManager: { closeSession: closeSessionMock },
+					},
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
@@ -587,7 +633,7 @@ describe('Meeting Controller', () => {
 				'session-1',
 				expect.objectContaining({ autoClose: true, closeReason: 'inactivity', closedAtMs: expect.any(Number) })
 			);
-			expect(followUpMock).toHaveBeenCalledWith({
+			expect(sendMock).toHaveBeenCalledWith({
 				content: 'Meeting closed due to inactivity. The partial report is saved.',
 			});
 			expect(sessionStore.deleteSession).toHaveBeenCalledWith('session-1');
@@ -595,15 +641,18 @@ describe('Meeting Controller', () => {
 
 		it('returns false when executeClose returns false (closeSession throws)', async () => {
 			const closeSessionMock = jest.fn().mockRejectedValue(new Error('close failed'));
+			const { channel: textChannel } = createMockTextChannel();
 			const sessionState = {
 				participantIds: [],
+				textChannelId: 'text-123',
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				voiceConnection: { destroy: jest.fn() },
 				participantStates: new Map(),
 				originalInteraction: {
-					followUp: jest.fn().mockResolvedValue(undefined),
-					editReply: jest.fn().mockResolvedValue(undefined),
-					client: { sessionManager: { closeSession: closeSessionMock } },
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
+						sessionManager: { closeSession: closeSessionMock },
+					},
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
@@ -617,16 +666,22 @@ describe('Meeting Controller', () => {
 
 		it('returns false when executeClose throws (e.g. followUp rejects)', async () => {
 			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Summary.' });
-			const followUpMock = jest.fn().mockRejectedValue(new Error('followUp failed'));
+			const brokenChannel = {
+				isTextBased: jest.fn().mockReturnValue(true),
+				send: jest.fn().mockRejectedValue(new Error('send failed')),
+				messages: { fetch: jest.fn().mockResolvedValue({ edit: jest.fn().mockResolvedValue(undefined) }) },
+			};
 			const sessionState = {
 				participantIds: [],
+				textChannelId: 'text-123',
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				voiceConnection: { destroy: jest.fn() },
 				participantStates: new Map(),
 				originalInteraction: {
-					followUp: followUpMock,
-					editReply: jest.fn().mockResolvedValue(undefined),
-					client: { sessionManager: { closeSession: closeSessionMock } },
+					client: {
+						channels: { fetch: jest.fn().mockResolvedValue(brokenChannel) },
+						sessionManager: { closeSession: closeSessionMock },
+					},
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);

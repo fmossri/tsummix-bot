@@ -90,19 +90,33 @@ function createClientWithMocks({ workerOverrides = {}, sessionManagerOverrides =
 		uiTimeoutMs: 60 * 1000,
 	}}, sessionStore);
 
+	const textChannel = {
+		isTextBased: jest.fn().mockReturnValue(true),
+		send: jest.fn().mockResolvedValue(undefined),
+		messages: {
+			fetch: jest.fn().mockResolvedValue({
+				edit: jest.fn().mockResolvedValue(undefined),
+			}),
+		},
+	};
+
 	const client = {
 		sessionStore,
 		sessionManager,
 		meetingController: controller,
+		channels: {
+			fetch: jest.fn().mockResolvedValue(textChannel),
+		},
 	};
 
-	return { client, controller, sessionManager, mockWorker, mockReportGen, mockSummaryGen };
+	return { client, controller, sessionManager, mockWorker, mockReportGen, mockSummaryGen, textChannel };
 }
 
 function createStartInteraction(client, sessionId = 'session-1') {
 	return {
 		member: { voice: { channel: { id: 'voice-123' } } },
 		user: { id: 'user-1', displayName: 'Alice' },
+		channelId: 'text-123',
 		guild: { id: 'guild-1', channels: { fetch: jest.fn().mockResolvedValue({ members: [] }) }, voiceAdapterCreator: {} },
 		reply: jest.fn().mockResolvedValue({
 			fetch: jest.fn().mockResolvedValue({ id: sessionId }),
@@ -183,7 +197,7 @@ afterAll(() => {
 
 describe('meeting flow integration', () => {
 	it('happy path: start → accept → close → confirm → summary posted', async () => {
-		const { client, controller } = createClientWithMocks();
+		const { client, controller, textChannel } = createClientWithMocks();
 		const sessionId = 'session-1';
 
 		const startInt = createStartInteraction(client, sessionId);
@@ -204,7 +218,7 @@ describe('meeting flow integration', () => {
 
 		const confirmInt = createConfirmInteraction(client);
 		await controller.handleButtonInteraction(confirmInt);
-		expect(startInt.followUp).toHaveBeenCalledWith(
+		expect(textChannel.send).toHaveBeenCalledWith(
 			expect.objectContaining({
 				content: expect.stringContaining(summaryText),
 			})
@@ -212,12 +226,12 @@ describe('meeting flow integration', () => {
 	});
 
 	it('pause and resume: start → accept → pause → resume → close → summary', async () => {
-		const { client, controller } = createClientWithMocks();
+		const { client, controller, textChannel } = createClientWithMocks();
 		const sessionId = 'session-1';
 
 		const voiceChannelWithMembers = {
 			id: 'voice-123',
-			members: [{ user: { id: 'user-1' } }],
+			members: new Map([['user-1', { user: { id: 'user-1' } }]]),
 		};
 		const startInt = createStartInteraction(client, sessionId);
 		startInt.guild.channels.fetch = jest.fn().mockResolvedValue(voiceChannelWithMembers);
@@ -233,7 +247,7 @@ describe('meeting flow integration', () => {
 		expect(sessionStore.getSessionById(sessionId).paused).toBe(true);
 
 		await controller.resumeMeeting(sessionId);
-		expect(startInt.followUp).toHaveBeenCalledWith(
+		expect(textChannel.send).toHaveBeenCalledWith(
 			expect.objectContaining({ content: 'Meeting recording resumed.' })
 		);
 		expect(sessionStore.getSessionById(sessionId).paused).toBe(false);
@@ -242,7 +256,7 @@ describe('meeting flow integration', () => {
 		await controller.closeMeeting(sessionId, closeInt);
 		const confirmInt = createConfirmInteraction(client);
 		await controller.handleButtonInteraction(confirmInt);
-		expect(startInt.followUp).toHaveBeenCalledWith(
+		expect(textChannel.send).toHaveBeenCalledWith(
 			expect.objectContaining({ content: expect.stringContaining(summaryText) })
 		);
 	});
@@ -377,7 +391,19 @@ describe('meeting flow integration', () => {
 				emptyRoomMs: 5 * 60 * 1000,
 				uiTimeoutMs: 60 * 1000,
 			}}, sessionStore);
-			const client = { sessionStore, sessionManager, meetingController: controller };
+			const textChannel = {
+				isTextBased: jest.fn().mockReturnValue(true),
+				send: jest.fn().mockResolvedValue(undefined),
+				messages: {
+					fetch: jest.fn().mockResolvedValue({ edit: jest.fn().mockResolvedValue(undefined) }),
+				},
+			};
+			const client = {
+				sessionStore,
+				sessionManager,
+				meetingController: controller,
+				channels: { fetch: jest.fn().mockResolvedValue(textChannel) },
+			};
 
 			const sessionId = 'session-1';
 			const startInt = createStartInteraction(client, sessionId);
@@ -405,7 +431,7 @@ describe('meeting flow integration', () => {
 			await controller.closeMeeting(sessionId, closeInt);
 			const confirmInt = createConfirmInteraction(client);
 			await controller.handleButtonInteraction(confirmInt);
-			expect(startInt.followUp).toHaveBeenCalledWith(
+			expect(textChannel.send).toHaveBeenCalledWith(
 				expect.objectContaining({
 					content: expect.stringContaining(summaryText),
 				})
