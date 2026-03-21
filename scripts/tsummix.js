@@ -5,12 +5,15 @@
  *
  * Usage (after npm link, or node scripts/tsummix.js):
  *   tsummix run                       → bot + STT wrapper (local processes)
- *   tsummix run --distribute          → bot + worker + STT wrapper (worker over HTTP, no Docker)
+ *   tsummix run --distribute | -d     → bot + worker + STT wrapper (worker over HTTP, no Docker)
  *   tsummix run bot                   → only Node bot
  *   tsummix run stt                   → only STT wrapper (Python)
  *   tsummix run worker                → only transcript worker HTTP server (Node)
- *   tsummix run dev [--distribute]    → docker compose up using docker-compose.dev.yml (bot+stt or bot+worker+stt)
- *   tsummix run prod [--distribute]   → docker compose up using docker-compose.prod.yml (bot+stt or bot+worker+stt)
+ *   tsummix run dev [-d] [-o]         → docker compose (docker-compose.dev.yml); -o merges docker-compose.observe.yml (Prometheus + Grafana)
+ *   tsummix run prod [-d] [-o]        → docker compose (docker-compose.prod.yml)
+ *
+ * Long flags: --distribute, --observe
+ * Short flags: -d (distribute), -o (observe); can combine e.g. -do
  *
  * Expects .venv in repo root with uvicorn when starting Python, and Docker/Compose
  * installed when using dev/prod.
@@ -23,8 +26,34 @@ const root = path.join(__dirname, '..');
 const args = process.argv.slice(2);
 const sub = args[0]; // "run"
 const rest = args.slice(1);
-const target = rest.find((a) => !a.startsWith('--')); // undefined | "bot" | "stt" | "worker" | "dev" | "prod"
-const hasDistributeFlag = rest.includes('--distribute');
+const target = rest.find((a) => !a.startsWith('-')); // undefined | "bot" | "stt" | "worker" | "dev" | "prod"
+
+/**
+ * Parses --distribute / -d / --observe / -o and combined short flags (-do).
+ */
+function parseRunFlags(argv) {
+	let distribute = false;
+	let observe = false;
+	for (const a of argv) {
+		if (a === '--distribute') {
+			distribute = true;
+			continue;
+		}
+		if (a === '--observe') {
+			observe = true;
+			continue;
+		}
+		if (a.startsWith('-') && a !== '-' && !a.startsWith('--')) {
+			for (const ch of a.slice(1)) {
+				if (ch === 'd') distribute = true;
+				if (ch === 'o') observe = true;
+			}
+		}
+	}
+	return { distribute, observe };
+}
+
+const { distribute: hasDistributeFlag, observe: hasObserveFlag } = parseRunFlags(rest);
 const isWin = process.platform === 'win32';
 
 function runBot() {
@@ -101,9 +130,25 @@ function runDistribute() {
 	});
 }
 
-function runCompose(file, distribute) {
-	const services = distribute ? [] : ['bot', 'stt-wrapper'];
-	const composeArgs = ['compose', '-f', file, 'up', ...services];
+/**
+ * @param {string} file docker-compose file name
+ * @param {boolean} distribute
+ * @param {boolean} observe merge docker-compose.observe.yml (Prometheus + Grafana)
+ */
+function runCompose(file, distribute, observe) {
+	const composeArgs = ['compose', '-f', file];
+	if (observe) {
+		composeArgs.push('-f', 'docker-compose.observe.yml');
+	}
+	composeArgs.push('up');
+
+	if (observe && !distribute) {
+		composeArgs.push('bot', 'stt-wrapper', 'prometheus', 'grafana');
+	} else if (!observe && !distribute) {
+		composeArgs.push('bot', 'stt-wrapper');
+	}
+	// distribute: no service list → start all services in merged compose
+
 	const child = spawn('docker', composeArgs, {
 		cwd: root,
 		stdio: 'inherit',
@@ -117,8 +162,14 @@ function runCompose(file, distribute) {
 }
 
 if (sub !== 'run') {
-	console.error('Usage: tsummix run [bot|stt|worker|dev|prod] [--distribute]');
+	console.error('Usage: tsummix run [bot|stt|worker|dev|prod] [--distribute|-d] [--observe|-o]');
 	process.exit(1);
+}
+
+if (hasObserveFlag && (!target || (target !== 'dev' && target !== 'prod'))) {
+	console.warn(
+		'tsummix: --observe (-o) only applies to "tsummix run dev" or "tsummix run prod" (Docker Compose). Ignored for local processes.',
+	);
 }
 
 if (!target) {
@@ -136,10 +187,10 @@ if (!target) {
 } else if (target === 'worker') {
 	runWorker();
 } else if (target === 'dev') {
-	runCompose('docker-compose.dev.yml', hasDistributeFlag);
+	runCompose('docker-compose.dev.yml', hasDistributeFlag, hasObserveFlag);
 } else if (target === 'prod') {
-	runCompose('docker-compose.prod.yml', hasDistributeFlag);
+	runCompose('docker-compose.prod.yml', hasDistributeFlag, hasObserveFlag);
 } else {
-	console.error('Usage: tsummix run [bot|stt|worker|dev|prod] [--distribute]');
+	console.error('Usage: tsummix run [bot|stt|worker|dev|prod] [--distribute|-d] [--observe|-o]');
 	process.exit(1);
 }
