@@ -13,6 +13,10 @@ const histogramBuckets = {
   meeting_duration_ms: [0, 60e3, 300e3, 600e3, 1800e3, 3600e3, Infinity],
 };
 const histograms = {};
+/** @type {Record<string, number>} */
+const histogramSums = {};
+/** @type {Record<string, number>} */
+const histogramCounts = {};
 
 function increment(name, n = 1) {
   counters[name] = (counters[name] || 0) + n;
@@ -35,6 +39,8 @@ function observe(name, value) {
   let i = 0;
   while (i < buckets.length && value > buckets[i]) i++;
   if (i < buckets.length) histograms[name][i]++;
+  histogramSums[name] = (histogramSums[name] || 0) + value;
+  histogramCounts[name] = (histogramCounts[name] || 0) + 1;
 }
 
 /** Returns a snapshot of all metrics (for tests or future /metrics endpoint). */
@@ -43,9 +49,14 @@ function getSnapshot() {
     counters: { ...counters },
     gauges: { ...gauges },
     histograms: Object.fromEntries(
-      Object.entries(histograms).map(([name, buckets]) => [
+      Object.entries(histograms).map(([name, bins]) => [
         name,
-        { buckets: histogramBuckets[name], counts: [...buckets] },
+        {
+          bucketUpperBounds: histogramBuckets[name],
+          binCounts: [...bins],
+          sum: histogramSums[name] ?? 0,
+          count: histogramCounts[name] ?? 0,
+        },
       ])
     ),
   };
@@ -56,6 +67,8 @@ function reset() {
   Object.keys(counters).forEach((k) => delete counters[k]);
   Object.keys(gauges).forEach((k) => delete gauges[k]);
   Object.keys(histograms).forEach((k) => delete histograms[k]);
+  Object.keys(histogramSums).forEach((k) => delete histogramSums[k]);
+  Object.keys(histogramCounts).forEach((k) => delete histogramCounts[k]);
 }
 
 module.exports = {
