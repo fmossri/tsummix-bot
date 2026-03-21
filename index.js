@@ -9,11 +9,14 @@ const { getTranscriptWorker } = require('./services/transcript-worker/get-transc
 const { createReportGenerator } = require('./services/report-generator/report-generator.js');
 const { createSummaryGenerator } = require('./services/report-generator/summary-generator.js');
 const { createMeetingController } = require('./controller/meeting-controller.js');
+const { startBotMetricsServerIfConfigured } = require('./services/metrics/prometheus-exporter.js');
 
 const token = config.discordToken;
 
+startBotMetricsServerIfConfigured(config.botMetrics);
+
 if (!token) {
-    console.error('DISCORD_TOKEN must be set in .env');
+    console.error('DISCORD_AUTH_TOKEN must be set in .env');
     process.exit(1);
 }
 

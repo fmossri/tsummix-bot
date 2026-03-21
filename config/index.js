@@ -26,6 +26,21 @@ function getNonZeroInt(name, fallback) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   }
 
+/** Positive port or `null` if unset / invalid — for optional HTTP servers (e.g. bot /metrics). */
+function getOptionalPositiveInt(name) {
+    const raw = process.env[name];
+    if (raw == null || raw === '') {
+        return null;
+    }
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getString(name, fallback) {
+    const raw = process.env[name];
+    return raw != null && String(raw).trim() !== '' ? String(raw).trim() : fallback;
+}
+
 function getBoolean(name, fallback) {
     const raw = process.env[name];
     const parsed = raw != null ? raw.toLowerCase().trim() === 'true' : fallback;
@@ -91,6 +106,11 @@ const resolvedWorkerAuthToken = workerUseLocal
 module.exports = {
     //Client config
     discordToken: requireStringToken('DISCORD'),
+    // Optional: bot process Prometheus scrape (GET /metrics). Port unset = disabled.
+    botMetrics: {
+        port: getOptionalPositiveInt('BOT_METRICS_PORT'),
+        host: getString('BOT_METRICS_BIND', '127.0.0.1'),
+    },
     //Controller config
     controllerConfig: {
         meetingTimeouts: {
