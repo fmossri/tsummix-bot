@@ -79,7 +79,7 @@ function createClientWithMocks({ workerOverrides = {}, sessionManagerOverrides =
 		createReportGenerator: () => mockReportGen,
 		createSummaryGenerator: () => mockSummaryGen,
 		transcriptWorker: mockWorker,
-		managerConfig: { maxRetries: 3 },
+		managerConfig: { maxRetries: 3, chunkerConfig: { chunkingStrategy: 'fixedSize', fixedSize: 30 * 16000 } },
 		...sessionManagerOverrides,
 	});
 
@@ -272,7 +272,7 @@ describe('meeting flow integration', () => {
 			createReportGenerator: () => mockReportGen,
 			createSummaryGenerator: () => mockSummaryGen,
 			transcriptWorker: mockWorker,
-			managerConfig: { maxRetries: 3 },
+			managerConfig: { maxRetries: 3, chunkerConfig: { chunkingStrategy: 'fixedSize', fixedSize: 30 * 16000 } },
 		});
 		const controller = createMeetingController({ meetingTimeouts: {
 			explicitPauseMs: 30 * 60 * 1000,
@@ -307,7 +307,7 @@ describe('meeting flow integration', () => {
 			createReportGenerator: () => mockReportGen,
 			createSummaryGenerator: () => mockSummaryGen,
 			transcriptWorker: mockWorker,
-			managerConfig: { maxRetries: 3 },
+			managerConfig: { maxRetries: 3, chunkerConfig: { chunkingStrategy: 'fixedSize', fixedSize: 30 * 16000 } },
 		});
 		const controller = createMeetingController({ meetingTimeouts: {
 			explicitPauseMs: 30 * 60 * 1000,
@@ -383,7 +383,7 @@ describe('meeting flow integration', () => {
 				createReportGenerator: () => mockReportGen,
 				createSummaryGenerator: () => mockSummaryGen,
 				transcriptWorker: worker,
-				managerConfig: { maxRetries: 3 },
+				managerConfig: { maxRetries: 3, chunkerConfig: { chunkingStrategy: 'fixedSize', fixedSize: 30 * 16000 } },
 			});
 			const controller = createMeetingController({ meetingTimeouts: {
 				explicitPauseMs: 30 * 60 * 1000,

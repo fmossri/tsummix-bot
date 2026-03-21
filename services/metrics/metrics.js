@@ -9,6 +9,7 @@ const gauges = {};
 const histogramBuckets = {
   stt_latency_ms: [0, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, Infinity],
   stt_queue_wait_ms: [0, 50, 100, 250, 500, 1000, 2500, 5000, 15000, 60000, 120000, 300000, 600000, Infinity],
+  chunk_duration_ms: [0, 1000, 2000, 5000, 10000, 15000, 20000, 25000, 30000, Infinity],
   meeting_duration_ms: [0, 60e3, 300e3, 600e3, 1800e3, 3600e3, Infinity],
 };
 const histograms = {};

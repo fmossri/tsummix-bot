@@ -1,6 +1,6 @@
 # Tsummix
 
-**Status:** Early (v0.3). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Transcript and report timestamps reflect real (wall-clock) meeting time. Service-to-service authentication (Bot ↔ Worker, Worker ↔ Wrapper) in place for non-local deployments. Test suite in place (unit + integration).
+**Status:** Early (v0.4). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Configurable audio chunking (fixed-size or silence-based with three-tier detection). Transcript and report timestamps reflect real (wall-clock) meeting time. Service-to-service authentication (Bot ↔ Worker, Worker ↔ Wrapper) in place for non-local deployments. Test suite in place (unit + integration).
 
 A Discord bot that implements STT and summarization capabilities.
 
@@ -15,7 +15,10 @@ A Discord bot that implements STT and summarization capabilities.
 - **`/resume`** — Resume recording: re-subscribe to in-channel participants and resume chunk flow.
 - **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
 - **Auto-close on empty room** — If everyone leaves the voice channel without `/close`, the bot pauses and waits. After a configurable timeout with no one rejoining, it auto-closes the meeting and posts a message. Timeouts are set in `config/index.js` (explicit pause, paused-empty-room, empty-room, UI confirm).
-- Session state stored in memory (no database). A **controller** (`controller/meeting-controller.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking, and report/summary generation.
+- **Configurable audio chunking** — Two strategies selectable via `CHUNKING_STRATEGY` env var:
+  - `fixedSize` (default) — cuts at a fixed sample count (default 30s).
+  - `silenceBased` — three-tier detection: (1) clean cut at silence after a minimum duration, (2) forced cut at max duration at the lowest-energy point, (3) idle-timeout cut when the speaker goes silent for too long. Thresholds and durations configurable via env vars.
+- Session state stored in memory (no database). A **controller** (`controller/meeting-controller.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking (delegating to the chosen strategy), and report/summary generation.
 
 ### STT wrapper (Python)
 
@@ -35,6 +38,8 @@ A Discord bot that implements STT and summarization capabilities.
   - `worker_queue_depth` (gauge)
   - `stt_latency_ms` (histogram)
   - `stt_queue_wait_ms` (histogram; time from worker chunk receipt to processing start)
+  - `chunk_duration_ms` (histogram; audio duration of each chunk cut by the session manager)
+  - `meeting_duration_ms` (histogram; wall-clock duration of each meeting)
 
 ### Transcript pretty-print & summarization
 
@@ -53,9 +58,9 @@ A Discord bot that implements STT and summarization capabilities.
 
 ## Flow
 
-After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio stream; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the controller stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the manager adds the summary to the report and the controller posts it to Discord. If everyone leaves without closing, the bot auto-closes after a configured timeout.
+After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio stream; the session manager chunks PCM using the configured strategy (fixed-size or silence-based) and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the controller stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the manager adds the summary to the report and the controller posts it to Discord. If everyone leaves without closing, the bot auto-closes after a configured timeout.
 
-**Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, controller, commands, voiceStateUpdate) and integration test covering happy path, pause/resume flow, and failure cases (worker down, STT retries).
+**Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, chunking strategies, controller, commands, voiceStateUpdate) and integration tests covering happy path, pause/resume flow, silence-based chunking, and failure cases (worker down, STT retries).
 
 ---
 
@@ -130,6 +135,13 @@ Copy `.env-example` to `.env` and set:
 | `LLM_USE_LOCAL`          | Whether to use a local LLM instead of a remote API. |
 | `OLLAMA_BASE_URL`        | Base URL of the Ollama server (e.g. `http://localhost:11434`). |
 | `OLLAMA_MODEL`           | Ollama model name to use (e.g. `phi3:mini`). |
+| `CHUNKING_STRATEGY`      | Audio chunking strategy: `fixedSize` (default) or `silenceBased`. |
+| `MIN_CHUNK_MS`           | Minimum chunk duration in ms before silence-based cut is allowed (default `20000`). |
+| `MAX_CHUNK_MS`           | Maximum chunk duration in ms; forced cut at this length (default `30000`). |
+| `SILENCE_THRESHOLD`      | RMS energy threshold for silence detection (default `500`). |
+| `SILENCE_HOLD_MS`        | Duration in ms of silence at the buffer tail required to trigger a clean cut (default `1000`). |
+| `TAIL_WINDOW_MS`         | Tail window in ms scanned for the lowest-energy cut point on forced cuts (default `3000`). |
+| `IDLE_TIMEOUT_MS`        | Wall-clock silence gap in ms before idle-timeout cuts a stale buffer (default `5000`). |
 | `LLM_TRUNCATION_ENABLED` | Enable truncation for long reports before calling the LLM (`true`/`false`). |
 | `LLM_TRUNCATION_MAX_CHARS` | Maximum number of report characters to send per LLM call (e.g. `12000`). |
 | `LLM_TRUNCATION_STRATEGY` | Truncation strategy: `tail` (most recent part) or `head` (start of meeting). |
@@ -219,7 +231,7 @@ pytest tests/stt_wrapper/test_app.py
 | `commands/utility/` | Slash commands: `start.js`, `pause.js`, `resume.js`, `close.js` |
 | `events/` | `ready.js`, `interactionCreate.js` |
 | `session.js` | In-memory session store (`sessionStore`) |
-| `config/index.js` | Central configuration (worker and manager config, timeouts, LLM timeouts) |
+| `config/index.js` | Central configuration: chunking strategy and thresholds (ms → samples conversion), worker and manager config, timeouts, LLM timeouts |
 | `controller/meeting-controller.js` | Orchestrates meeting flow: start/pause/resume/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
@@ -232,7 +244,8 @@ pytest tests/stt_wrapper/test_app.py
 | `services/report-generator/report-generator.js` | Generates pretty-printed Markdown reports (`reports/meeting-report_*.md`) from JSONL transcripts |
 | `services/report-generator/summary-generator.js` | Calls an LLM to summarize a report into a short Markdown summary |
 | `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |
-| `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the controller wires), report and summary generation. Controller owns voice and capture. |
+| `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (delegates to the configured strategy), report and summary generation. Controller owns voice and capture. |
+| `services/session-manager/chunking/choose-strategy.js` | Chunking strategy selector and implementations (`fixedSize`, `silenceBased`) plus audio helpers (`calculateRMS`, `checkRecentSilence`, `findLowestEnergyPoint`). |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
 | `scripts/tsummix.js` | CLI: `tsummix run` (local), `tsummix run dev/prod [--distribute]`, and worker-only/distributed options. Use after `npm link`. |
 | `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=silent` so test output stays readable |

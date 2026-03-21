@@ -72,6 +72,13 @@ function requireStringToken(name) {
     return token;
 }
 
+const minSamples = (getNonZeroInt('MIN_CHUNK_MS', 20 * 1000) / 1000) * 16000;
+const maxSamples = (getNonZeroInt('MAX_CHUNK_MS', 30 * 1000) / 1000) * 16000;
+const holdSamples = (getNonZeroInt('SILENCE_HOLD_MS', 1000) / 1000) * 16000;
+const tailWindowSamples = (getNonZeroInt('TAIL_WINDOW_MS', 3 * 1000) / 1000) * 16000;
+const silenceThreshold = getNonZeroInt('SILENCE_THRESHOLD', 500);
+const idleTimeoutMs = getNonZeroInt('IDLE_TIMEOUT_MS', 5 * 1000);
+
 const workerUseLocal = getBoolean('WORKER_USE_LOCAL', true);
 const resolvedWorkerBaseUrl = workerUseLocal
     ? 'http://localhost:3000'
@@ -101,18 +108,6 @@ module.exports = {
     managerConfig: {
         //Port for the manager HTTP server
         managerPort: getNonZeroInt('MANAGER_PORT', 3002),
-        //Chunking strategy
-        chunkingStrategy: getChunkingStrategy('CHUNKING_STRATEGY'),
-        //Fixed size for the chunks
-        fixedSize: getNonZeroInt('FIXED_SIZE', 30 * 16000),
-        //Silence threshold for the chunks
-        silenceThreshold: getNonZeroInt('SILENCE_THRESHOLD', -42),
-        //Silence hold time for the chunks
-        silenceHoldMs: getNonZeroInt('SILENCE_HOLD_MS', 500),
-        //Minimum chunk duration
-        minChunkMs: getNonZeroInt('MIN_CHUNK_MS', 20 * 1000),
-        //Maximum chunk duration
-        maxChunkMs: getNonZeroInt('MAX_CHUNK_MS', 30 * 1000),
         //Auth token for the bot to access the worker
         workerAuthToken: resolvedWorkerAuthToken,
         //Base URL for the worker HTTP server
@@ -121,6 +116,24 @@ module.exports = {
         maxRetries: MANAGER_MAX_RETRIES,
         //Timeout for the LLM to generate a summary
         llmTimeoutMs: getNonZeroInt('LLM_TIMEOUT_MS', DEFAULT_LLM_TIMEOUT_MS),
+        chunkerConfig: {
+            //Chunking strategy
+            chunkingStrategy: getChunkingStrategy('CHUNKING_STRATEGY'),
+            //Fixed size for the chunks
+            fixedSize: maxSamples,
+            //Silence threshold for the chunks
+            silenceThreshold: silenceThreshold,
+            //Silence hold time for the chunks
+            holdSamples: holdSamples,
+            //Minimum chunk duration
+            minSamples: minSamples,
+            //Maximum chunk duration
+            maxSamples: maxSamples,
+            //Tail window size for finding the lowest energy point
+            tailWindowSamples: tailWindowSamples,
+            //Idle stream timeout for cutting chunks
+            idleTimeoutMs: idleTimeoutMs,
+        },
     },
     //Worker config
     workerConfig: {

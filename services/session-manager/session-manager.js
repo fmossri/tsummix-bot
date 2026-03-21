@@ -1,6 +1,7 @@
-const { convertPCMToWav } = require('../../utils/convert-pcm-to-wav.js');
 const logger = require('../logger/logger');
 const appMetrics = require('../metrics/metrics');
+const { convertPCMToWav } = require('../../utils/convert-pcm-to-wav.js');
+const { chooseChunkingStrategy } = require('./chunking/choose-strategy.js');
 
 const COMPONENT = 'session-manager';
 
@@ -34,33 +35,29 @@ function createSessionManager({
         let totalSamplesEmitted = participantState.chunkerState.totalSamplesEmitted;
         let chunkClockTimeMs = participantState.chunkerState.chunkClockTimeMs;
 
-        try {
-            const chunkPCMBuffer = samplesBuffer.subarray(0, TARGET_BYTES);
-            samplesBuffer = samplesBuffer.subarray(TARGET_BYTES);
-            const wavBuffer = convertPCMToWav(chunkPCMBuffer, SAMPLE_RATE);
-            const chunkStartSample = totalSamplesEmitted;
-            const chunkStartTimeMs = (chunkStartSample / SAMPLE_RATE) * 1000;
+        const chunkPCMBuffer = samplesBuffer.subarray(0, TARGET_BYTES);
+        samplesBuffer = samplesBuffer.subarray(TARGET_BYTES);
+        const wavBuffer = convertPCMToWav(chunkPCMBuffer, SAMPLE_RATE);
+        const chunkStartSample = totalSamplesEmitted;
+        const chunkStartTimeMs = (chunkStartSample / SAMPLE_RATE) * 1000;
 
-            const chunk = {
-                chunkId: getNextChunkId(sessionId),
-                participantData: participantData,
-                sendRetryCount: 0,
-                chunkClockTimeMs: chunkClockTimeMs,
-                chunkStartTimeMs: chunkStartTimeMs,
-                audio: wavBuffer,
-            };
-            totalSamplesEmitted += targetSamples;
-            samplesInBuffer -= targetSamples;
-            chunkClockTimeMs = Date.now();
-            participantState.chunkerState.chunkClockTimeMs = chunkClockTimeMs;
-            participantState.chunkerState.samplesBuffer = samplesBuffer;
-            participantState.chunkerState.samplesInBuffer = samplesInBuffer;
-            participantState.chunkerState.totalSamplesEmitted = totalSamplesEmitted;
-            return chunk;
-        }
-        catch (error) {
-            throw error;
-        }
+        const chunk = {
+            chunkId: getNextChunkId(sessionId),
+            participantData: participantData,
+            sendRetryCount: 0,
+            chunkClockTimeMs: chunkClockTimeMs,
+            chunkStartTimeMs: chunkStartTimeMs,
+            audio: wavBuffer,
+        };
+        totalSamplesEmitted += targetSamples;
+        samplesInBuffer -= targetSamples;
+        chunkClockTimeMs = Date.now();
+        participantState.chunkerState.chunkClockTimeMs = chunkClockTimeMs;
+        participantState.chunkerState.samplesBuffer = samplesBuffer;
+        participantState.chunkerState.samplesInBuffer = samplesInBuffer;
+        participantState.chunkerState.totalSamplesEmitted = totalSamplesEmitted;
+        appMetrics.observe('chunk_duration_ms', (targetSamples / 16000) * 1000);
+        return chunk;
     }
 
 	function getNextChunkId(sessionId) {
@@ -153,12 +150,40 @@ function createSessionManager({
 			});
 			return false;
 		}
-		const TARGET_SAMPLES = 30 * 16000;
 		participantState.chunkerState._hasLoggedPcmData = false;
 		try {
 			const pcmStream = participantState.pcmStream;
 			pcmStream.on('data', (pcmBuffer) => {
 				let samplesInThisBuffer = pcmBuffer.length / 2;
+                let samplesToCut = null;
+                let now = Date.now();
+				while (samplesToCut = sessionState.chunkingStrategy(participantState.chunkerState, managerConfig.chunkerConfig, now)) {
+                    try {
+                        const participant = { participantId: participantId, participantState: participantState };
+                        const chunk = cutChunk(sessionId, participant, samplesToCut);
+                        sessionState.chunksQueue.push(chunk);
+                        logger.info(COMPONENT, 'chunk_cut', 'Cut chunk during meeting', {
+                            sessionId,
+                            participantId,
+                            displayName: participantState.displayName,
+                            chunkId: chunk.chunkId,
+                            samplesCut: samplesToCut,
+                            queueLengthAfter: sessionState.chunksQueue.length,
+                        });
+                        ensureProcessing(sessionId);
+                    }
+                    catch (error) {
+                        logger.error(COMPONENT, 'chunk_send_failed', 'Error cutting chunk', {
+                            sessionId,
+                            transcriptId: sessionId,
+                            participantId,
+                            errorClass: 'ChunkCutFailed',
+                            innerErrorClass: error.constructor?.name || 'Error',
+                            message: error.message,
+                        });
+                        return false;
+                    }
+				}
                 if (participantState.chunkerState.samplesInBuffer === 0) {
                     participantState.chunkerState.chunkClockTimeMs = Date.now();
                 }
@@ -176,33 +201,6 @@ function createSessionManager({
 						samplesInThisChunk: samplesInThisBuffer,
 						totalSamplesInBuffer: participantState.chunkerState.samplesInBuffer,
 					});
-				}
-				while (participantState.chunkerState.samplesInBuffer >= TARGET_SAMPLES) {
-                    try {
-                        const participant = { participantId: participantId, participantState: participantState };
-                        const chunk = cutChunk(sessionId, participant, TARGET_SAMPLES);
-                        sessionState.chunksQueue.push(chunk);
-                        logger.info(COMPONENT, 'chunk_cut', 'Cut chunk during meeting', {
-                            sessionId,
-                            participantId,
-                            displayName: participantState.displayName,
-                            chunkId: chunk.chunkId,
-                            samplesCut: TARGET_SAMPLES,
-                            queueLengthAfter: sessionState.chunksQueue.length,
-                        });
-                        ensureProcessing(sessionId);
-                    }
-                    catch (error) {
-                        logger.error(COMPONENT, 'chunk_send_failed', 'Error cutting chunk', {
-                            sessionId,
-                            transcriptId: sessionId,
-                            participantId,
-                            errorClass: 'ChunkCutFailed',
-                            innerErrorClass: error.constructor?.name || 'Error',
-                            message: error.message,
-                        });
-                        return false;
-                    }
 				}
                 return true;
 			});
@@ -287,7 +285,7 @@ function createSessionManager({
         }
     }
 
-	async function startSession(sessionId, sessionData) {
+	async function startSession(sessionId) {
         try {
             const session = sessionStore.getSessionById(sessionId);
             if (!session) {
@@ -302,6 +300,7 @@ function createSessionManager({
 			const sessionState = {
 				nextChunkId: 0,
 				chunksQueue: [],
+                chunkingStrategy: chooseChunkingStrategy(managerConfig.chunkerConfig.chunkingStrategy),
 				processingPromise: null,
 				transcriptPath: null,
 				voiceChannelId: session.voiceChannelId,

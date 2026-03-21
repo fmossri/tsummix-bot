@@ -3,7 +3,13 @@ const { createSessionManager } = require('../../../services/session-manager/sess
 const TARGET_CHUNK_SECONDS = 30;
 const SAMPLE_RATE = 16000;
 const TARGET_BYTES = TARGET_CHUNK_SECONDS * SAMPLE_RATE * 2;
-const DEFAULT_MANAGER_CONFIG = { maxRetries: 3 };
+const DEFAULT_MANAGER_CONFIG = {
+	maxRetries: 3,
+	chunkerConfig: {
+		chunkingStrategy: 'fixedSize',
+		fixedSize: TARGET_CHUNK_SECONDS * SAMPLE_RATE,
+	},
+};
 
 function createMockSessionStore(session = null) {
 	return {
@@ -252,6 +258,7 @@ describe('Session Manager', () => {
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+			pcmStream.emit('data', Buffer.alloc(0));
 
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
@@ -297,12 +304,14 @@ describe('Session Manager', () => {
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+			pcmStream.emit('data', Buffer.alloc(0));
 			await new Promise((r) => setImmediate(r));
 			const firstChunk = transcriptWorker.enqueueChunk.mock.calls[0][1];
 			expect(firstChunk.chunkClockTimeMs).toBeDefined();
 			expect(typeof firstChunk.chunkClockTimeMs).toBe('number');
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+			pcmStream.emit('data', Buffer.alloc(0));
 			await new Promise((r) => setImmediate(r));
 			const secondChunk = transcriptWorker.enqueueChunk.mock.calls[1][1];
 			expect(secondChunk.chunkClockTimeMs).toBeDefined();
@@ -338,6 +347,7 @@ describe('Session Manager', () => {
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+			pcmStream.emit('data', Buffer.alloc(0));
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
 
@@ -378,6 +388,7 @@ describe('Session Manager', () => {
 			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(fixedNow);
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+			pcmStream.emit('data', Buffer.alloc(0));
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
 
@@ -425,6 +436,7 @@ describe('Session Manager', () => {
 				await sessionManager.startSession('session-1');
 				sessionManager.chunkStream('session-1', 'u1');
 				pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+				pcmStream.emit('data', Buffer.alloc(0));
 
 				await new Promise((r) => setImmediate(r));
 				await new Promise((r) => setImmediate(r));
@@ -473,6 +485,7 @@ describe('Session Manager', () => {
 				await sessionManager.startSession('session-1');
 				sessionManager.chunkStream('session-1', 'u1');
 				pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
+				pcmStream.emit('data', Buffer.alloc(0));
 
 				await new Promise((r) => setImmediate(r));
 				await new Promise((r) => setImmediate(r));
@@ -528,6 +541,7 @@ describe('Session Manager', () => {
 
 			// Provide enough PCM for two full chunks in a single data event
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES * 2));
+			pcmStream.emit('data', Buffer.alloc(0));
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
@@ -793,6 +807,189 @@ describe('Session Manager', () => {
 			await sessionManager.startSession('session-1');
 
 			await expect(sessionManager.pauseSession('session-1')).rejects.toThrow();
+		});
+	});
+
+	describe('silenceBased integration', () => {
+		const SILENCE_CONFIG = {
+			maxRetries: 3,
+			chunkerConfig: {
+				chunkingStrategy: 'silenceBased',
+				minSamples: 100,
+				maxSamples: 8000,
+				holdSamples: 10,
+				silenceThreshold: 500,
+				tailWindowSamples: 8000,
+				idleTimeoutMs: 5000,
+			},
+		};
+
+		function createConstantBuffer(numSamples, value = 0) {
+			const buffer = Buffer.alloc(numSamples * 2);
+			for (let i = 0; i < numSamples; i++) {
+				buffer.writeInt16LE(value, i * 2);
+			}
+			return buffer;
+		}
+
+		function createSilenceBasedSessionManager(overrides = {}) {
+			const { EventEmitter } = require('events');
+			const pcmStream = new EventEmitter();
+			const participantStates = new Map([
+				['u1', {
+					displayName: 'Alice',
+					pcmStream,
+					chunkerState: {
+						samplesBuffer: Buffer.alloc(0),
+						samplesInBuffer: 0,
+						totalSamplesEmitted: 0,
+						chunkClockTimeMs: null,
+					},
+				}],
+			]);
+			const session = { voiceChannelId: 'voice-123', participantStates };
+			const sessionStore = createMockSessionStore(session);
+			const transcriptWorker = createMockTranscriptWorker(overrides.transcriptWorkerOverrides);
+			const sessionManager = createSessionManager({
+				sessionStore,
+				createReportGenerator: () => createMockReportGenerator(),
+				createSummaryGenerator: () => createMockSummaryGenerator(),
+				transcriptWorker,
+				managerConfig: SILENCE_CONFIG,
+			});
+			return { sessionManager, transcriptWorker, pcmStream, participantStates };
+		}
+
+		it('Tier 1: cuts at silence boundary when buffer > minSamples and tail goes silent', async () => {
+			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1');
+			sessionManager.chunkStream('session-1', 'u1');
+
+			const loud = createConstantBuffer(101, 10000);
+			const silent = createConstantBuffer(10, 0);
+			const audio = Buffer.concat([loud, silent]); // 111 samples
+
+			pcmStream.emit('data', audio);
+			pcmStream.emit('data', Buffer.alloc(0));
+
+			await new Promise((r) => setImmediate(r));
+			await new Promise((r) => setImmediate(r));
+
+			expect(transcriptWorker.enqueueChunk).toHaveBeenCalledTimes(1);
+			const chunk = transcriptWorker.enqueueChunk.mock.calls[0][1];
+			expect(chunk.audio).toBeInstanceOf(Buffer);
+			expect(chunk.chunkStartTimeMs).toBe(0);
+		});
+
+		it('Tier 1: does not cut when buffer > minSamples but tail is loud', async () => {
+			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1');
+			sessionManager.chunkStream('session-1', 'u1');
+
+			pcmStream.emit('data', createConstantBuffer(200, 10000));
+			pcmStream.emit('data', Buffer.alloc(0));
+
+			await new Promise((r) => setImmediate(r));
+
+			expect(transcriptWorker.enqueueChunk).not.toHaveBeenCalled();
+		});
+
+		it('Tier 2: forces cut when buffer hits maxSamples without silence', async () => {
+			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1');
+			sessionManager.chunkStream('session-1', 'u1');
+
+			pcmStream.emit('data', createConstantBuffer(8000, 10000));
+			pcmStream.emit('data', Buffer.alloc(0));
+
+			await new Promise((r) => setImmediate(r));
+			await new Promise((r) => setImmediate(r));
+
+			expect(transcriptWorker.enqueueChunk).toHaveBeenCalledTimes(1);
+		});
+
+		it('Tier 3: cuts stale buffer after idle timeout', async () => {
+			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1');
+			sessionManager.chunkStream('session-1', 'u1');
+
+			// Emit small loud buffer (below minSamples, so Tier 1 won't fire)
+			pcmStream.emit('data', createConstantBuffer(50, 10000));
+
+			await new Promise((r) => setImmediate(r));
+			expect(transcriptWorker.enqueueChunk).not.toHaveBeenCalled();
+
+			// Advance wall clock past idleTimeoutMs
+			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10000);
+
+			pcmStream.emit('data', Buffer.alloc(0));
+
+			await new Promise((r) => setImmediate(r));
+			await new Promise((r) => setImmediate(r));
+
+			expect(transcriptWorker.enqueueChunk).toHaveBeenCalledTimes(1);
+			nowSpy.mockRestore();
+		});
+
+		it('chunk_duration_ms metric reflects variable chunk sizes', async () => {
+			const appMetrics = require('../../../services/metrics/metrics.js');
+			const observeSpy = jest.spyOn(appMetrics, 'observe');
+
+			const { sessionManager, pcmStream } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1');
+			sessionManager.chunkStream('session-1', 'u1');
+
+			// Emit 111 samples with silent tail → Tier 1 cuts 111 samples
+			const audio = Buffer.concat([
+				createConstantBuffer(101, 10000),
+				createConstantBuffer(10, 0),
+			]);
+			pcmStream.emit('data', audio);
+			pcmStream.emit('data', Buffer.alloc(0));
+
+			await new Promise((r) => setImmediate(r));
+
+			const durationCall = observeSpy.mock.calls.find((c) => c[0] === 'chunk_duration_ms');
+			expect(durationCall).toBeDefined();
+			// 111 samples at 16kHz = 6.9375ms
+			expect(durationCall[1]).toBeCloseTo((111 / 16000) * 1000, 2);
+			observeSpy.mockRestore();
+		});
+
+		it('flushQueues cuts remaining buffer regardless of silence state', async () => {
+			const { EventEmitter } = require('events');
+			const pcmStream = new EventEmitter();
+			const participantState = {
+				displayName: 'Alice',
+				pcmStream,
+				chunkerState: {
+					samplesBuffer: createConstantBuffer(50, 10000), // loud, below minSamples
+					samplesInBuffer: 50,
+					totalSamplesEmitted: 0,
+					chunkClockTimeMs: Date.now(),
+				},
+			};
+			const participantStates = new Map([['u1', participantState]]);
+			const storeSession = { voiceChannelId: 'voice-123', participantStates, paused: true };
+			const sessionStore = createMockSessionStore(storeSession);
+			const transcriptWorker = createMockTranscriptWorker();
+			const sessionManager = createSessionManager({
+				sessionStore,
+				createReportGenerator: () => createMockReportGenerator(),
+				createSummaryGenerator: () => createMockSummaryGenerator(),
+				transcriptWorker,
+				managerConfig: SILENCE_CONFIG,
+			});
+
+			await sessionManager.startSession('session-1');
+			const result = await sessionManager.pauseSession('session-1');
+
+			await new Promise((r) => setImmediate(r));
+			await new Promise((r) => setImmediate(r));
+
+			expect(result).toBe(true);
+			expect(transcriptWorker.enqueueChunk).toHaveBeenCalledTimes(1);
+			expect(participantState.chunkerState.samplesInBuffer).toBe(0);
 		});
 	});
 });
