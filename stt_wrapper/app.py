@@ -19,6 +19,13 @@ if _here not in sys.path:
     sys.path.insert(0, _here)
 import cuda_env  # noqa: E402 — set LD_LIBRARY_PATH before faster_whisper
 
+from .prometheus_metrics import (
+    metrics_response,
+    observe_transcribe_error,
+    observe_transcribe_success,
+    stt_wrapper_ready,
+)
+
 class Segment(BaseModel):
     segmentIndex: int
     startMs: int
@@ -83,6 +90,7 @@ async def lifespan(app: FastAPI):
     app.state.model = None
     app.state.model_id = model_id
     app.state.device = device_flag
+    stt_wrapper_ready.set(0)
     try:
         model = WhisperModel(
             model_size_or_path=model_id,
@@ -92,9 +100,11 @@ async def lifespan(app: FastAPI):
         )
         app.state.model = model
         app.state.ready = True
+        stt_wrapper_ready.set(1)
     except Exception:
         traceback.print_exc()
         app.state.ready = False
+        stt_wrapper_ready.set(0)
     yield
     # No explicit teardown required; allow process exit to release resources.
 
@@ -106,6 +116,13 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.get("/metrics")
+def prometheus_metrics():
+    """Prometheus scrape (no auth; protect via network / bind address in deployment)."""
+    return metrics_response()
+
 
 @app.get("/health", dependencies=[Depends(verify_worker_auth)])
 def health():
@@ -143,6 +160,8 @@ def transcribe(request: TranscribeRequest) -> TranscribeResponse:
             processingMs=processing_ms,
             realTimeFactor=real_time_factor)
 
+        observe_transcribe_success(processing_ms)
+
         return TranscribeResponse(
             transcriptId=request.transcriptId,
             chunkId=request.chunkId,
@@ -151,6 +170,8 @@ def transcribe(request: TranscribeRequest) -> TranscribeResponse:
 
     except Exception as e:
         traceback.print_exc()
+        observe_transcribe_error()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         _transcribe_lock.release()
+        

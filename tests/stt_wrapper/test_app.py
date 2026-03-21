@@ -22,6 +22,17 @@ def _make_silent_wav_bytes(duration_seconds: float = 0.1, sample_rate: int = 160
     return buf.getvalue()
 
 
+def test_metrics_returns_prometheus_text():
+    """GET /metrics is unauthenticated (scrape endpoint)."""
+    client = TestClient(app)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert "text/plain" in resp.headers.get("content-type", "")
+    body = resp.text
+    assert "stt_wrapper_ready" in body
+    assert "# HELP" in body
+
+
 def test_health_includes_ready_and_metadata():
     client = TestClient(app)
 
