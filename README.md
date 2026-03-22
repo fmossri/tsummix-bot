@@ -283,7 +283,7 @@ pytest tests/stt_wrapper/test_app.py
 | `docker/prometheus/prometheus.yml` | Scrape targets when the app runs in Compose (service DNS names) |
 | `docker/prometheus/prometheus.host.yml` | Scrape targets when the app runs on the host (`host.docker.internal`) |
 | `docker/promtail/promtail-config.yaml` | Promtail: Docker log discovery → Loki (requires Docker socket mount) |
-| `docker/grafana/provisioning/` | Grafana datasource provisioning (Prometheus + Loki) |
+| `docker/grafana/provisioning/` | Grafana: datasources (Prometheus + Loki), dashboard provider, **Tsummix overview** dashboard (JSON) |
 | `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=silent` so test output stays readable |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |
 | `.env-example` | Example env vars (Discord + STT); copy to `.env` |
